@@ -1,0 +1,25 @@
+# Python 3.10
+# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+torchsummary
+
+numpy
+scipy
+tqdm
+
+# 3d Visualization
+open3d
+matplotlib
+seaborn
+
+scikit-learn
+ruamel.yaml
+
+# conda install -c conda-forge notebook
+
+tensorboard
+tensorboardX
+#tensorboard --logdir=results/run-ID/logs
+
+psutil
+gputil
