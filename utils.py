@@ -467,21 +467,21 @@ def random_data_extraction_deeponet(config, full_ds):
     data_percent = {}
 
     # Coordinates are identical for all IDs
-    chosen_flow_label_0 = config['train']['chosen_flow_labels'][0]
+    chosen_flow_label_0 = config['train']['training_param_label'][0]
     volumePrm = full_ds[chosen_flow_label_0].PHY
-    coordinates = np.hstack((volumePrm.coord_x,))
+    coordinates = volumePrm.coord_x
     N_coordinates = coordinates.shape[0]
     x_idx = np.random.choice(N_coordinates,  round(decimal_fraction*N_coordinates), replace=False)
 
-    for chosen_flow_label in config['train']['chosen_flow_labels']:
+    for chosen_flow_label in config['train']['training_param_label']:
         
-        volumePrm = full_ds[chosen_flow_label].VOLUME
+        volumePrm = full_ds[chosen_flow_label].PHY
          # Coordinates
         x = coordinates[x_idx]
         
         # Velocities
-        velocity = np.hstack((volumePrm.vel_x))
-        vel = velocity[x_idx]
+        velocity = volumePrm.u
+        u = velocity[x_idx]
         
         data = np.hstack([x,u])
         data_percent[chosen_flow_label] = x.shape[0]/N_coordinates * 100

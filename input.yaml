@@ -12,8 +12,8 @@ project:
 
 dataset:
   path: '.dataset'
-  generate: true # true or false
-  processing: true  # true or false
+  generate: false # true or false
+  processing: false  # true or false
   train_fraction: 0.68
   # val_fraction: 0.02
   test_fraction: 0.3 
@@ -67,19 +67,19 @@ train:
   stop_iter: -1 
   batch_size_coll: 1024
   batch_dfraction:  # Specific decimal fraction with respect to total data in boundary conditions {Inlet, Wall, Outlet}, initial condition and validation ds
-  #   data: 0.001
+    data: 1.0
     ic: 1.0
     val: 1.0
   data_extraction: 
-     mode: 'none' # 'none', 'random'
-     decimal_fraction: 'none' # mode: 'none', 'random' -> 0.0015 or 0.003 
+     mode: 'random' # 'none', 'random'
+     decimal_fraction: 0.01 # mode: 'none', 'random'
 
 test: 
   n_test_param: 12
   test_param: [0.5,0.875,1.25,1.625,2.0, 0.56,0.67,0.93,1.12,1.5,1.73,1.95] # parameter c
   test_param_label: ['C05','C0875','C125','C1625','C20', 'C056','C067','C093','C112','C15','C173','C195']
   batch_size: 10000
-  t_values: [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
+  t_values: [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
  
 
 optim1:
@@ -116,8 +116,8 @@ random_weight_fact:  # Random Weight Factorization
   stddev : 0.1
 
 
-loss_terms: ["phy", "ic"]
-lambda_weights_init: [1.0, 1.0]
+loss_terms: ["phy", "ic", "data"]
+lambda_weights_init: [1.0, 1.0, 1.0]
 
 loss_balancing:  # Grad Norm - Self adaptive learning rate annealing algorithm 
   enabled: false

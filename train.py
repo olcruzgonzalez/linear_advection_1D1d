@@ -8,7 +8,7 @@ import torch
 import numpy as np
 
 # Local modules
-from models import NeuralNetwork, Trainer_DeepONet, Trainer_PIDeepONetLdata, Trainer_PIDeepONet
+from models import NeuralNetwork, Trainer_PIDeepONetLdata, Trainer_PIDeepONet
 from utils import convert_to_json, all_data_transformations_deeponet, random_data_extraction_deeponet
 
 
@@ -27,17 +27,7 @@ def training_call(config):
 
   
     # Training
-    if config['method'] == 'deeponet':
-        
-        config['logger'].info("Model definition")
-        model = NeuralNetwork(config = config)
-        model.to(config['device'])
-
-        config['logger'].info("### Training ...")
-        trainer = Trainer_DeepONet(config, model)
-        trainer.train(timePrm, full_ds, dataPrm, val_ds)
-
-    elif config['method'] == 'pi_deeponet_Ldata':
+    if config['method'] == 'pi_deeponet_Ldata':
 
         config['logger'].info("Model definition")
         model = NeuralNetwork(config = config)

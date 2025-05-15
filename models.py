@@ -424,7 +424,767 @@ class NeuralNetwork(nn.Module):
         self.config['logger'].info(f'trunk_component: {self.trunk}')
 
     
-  
+class Trainer_PIDeepONetLdata(nn.Module):
+    
+    def __init__(self, config, model):
+        
+        super().__init__()
+        
+        self.config = config
+        self.has_random_weight_fact = self.config['random_weight_fact']['enabled']
+        self.has_loss_balancing = self.config['loss_balancing']['enabled']
+        self.has_exponential_decay = self.config['optim1']['exponential_decay']['enabled']
+
+        # Initialize the SummaryWriter
+        if self.config['mode']=='train':
+            self.writer = SummaryWriter(log_dir=config['logs_folder_path'])
+
+        self.model = model
+        self.branch_out_dim = config['branch1']['neuralNet']['out_dim']
+        self.trunk_in_dim = config['trunk']['neuralNet']['in_dim']
+        self.output_dim = 1
+
+        # PDE parameters
+        self.c_dict = self.config['pde_param']['c']
+
+         # Optimizers
+        if config['optim1']['optimizer'] == 'Adam':
+
+            # Retrieve parameter groups from each model
+            param_groups_branch_sum = []
+            for branch in self.model.branch_list:
+                param_groups_branch_i = list(branch.param_groups)
+                param_groups_branch_sum += param_groups_branch_i
+            
+            param_groups_trunk = list(self.model.trunk.param_groups)
+
+            # Combine the parameter groups into a single list
+            combined_param_groups = param_groups_branch_sum + param_groups_trunk
+
+            self.optimizer_Adam = torch.optim.Adam(combined_param_groups, lr=config['optim1']['learning_rate'], \
+                                                    betas=(config['optim1']['beta1'], config['optim1']['beta2']), \
+                                                    eps=config['optim1']['eps'] )
+            
+            if self.has_exponential_decay:
+                def lr_lambda_func(current_step):
+                    """Custom function for the exponential decay."""
+                    
+                    decay_rate = self.config['optim1']['exponential_decay']['decay_rate']
+                    decay_steps = self.config['optim1']['exponential_decay']['decay_steps']
+
+                    factor = decay_rate ** (current_step / decay_steps)
+
+                    return factor
+
+                self.scheduler_Adam = torch.optim.lr_scheduler.LambdaLR(self.optimizer_Adam, lr_lambda_func)
+        
+        if config['optim2']['optimizer'] == 'LBFGS':
+
+            # Extract parameters from custom parameter groups
+            all_params = [param for group in self.model.branch_list[0].param_groups + self.model.trunk.param_groups for param in group['params']]
+            # all_params = [param for group in self.model.branch_list[0].param_groups + self.model.branch_list[1].param_groups + self.model.trunk.param_groups for param in group['params']]
+            # all_params = [param for group in self.model.mlp.param_groups for param in group['params']]
+            
+            self.optimizer_LBFGS = torch.optim.LBFGS(all_params, max_iter=config['optim2']['max_iter'], max_eval=config['optim2']['max_eval'], tolerance_grad=1.0 * torch.finfo(torch.float32).eps, history_size=50)
+
+        
+        # Loss function
+        self.loss_fn = torch.nn.MSELoss(reduction='mean')
+        
+
+        # Logging
+        self.total_loss = None
+        self.l2_error_u = None
+
+        # Loss terms
+        self.term_loss_tensor_dict = {key:[] for key in self.config['loss_terms']}
+
+        # lambdas initialization
+        self.term_lambdas_tensor = torch.tensor(
+                                    [self.config['lambda_weights_init'][i] for i in range(len(self.config['loss_terms']))], 
+                                    dtype=torch.float32, requires_grad=False).to(self.config['device'])
+
+        self.term_lambdas_tensor_dict = {key: self.term_lambdas_tensor[i] for i,key in enumerate(self.config['loss_terms'])}
+
+        self.log_log = """LOG\n"""
+        self.min_error_for_checkpoint = np.Infinity
+        self.runtime0 = self.config['tick_start']
+        self.best_iter = 0
+
+    def loss_data(self):
+
+        tau = []
+        for i, f_data_tensor_i in enumerate(self.f_data_tensor):
+            tau.append(self.model.branch_list[i](f_data_tensor_i))
+ 
+        beta = self.model.trunk(self.xt_data_tensor)
+
+        ## np.tile
+        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+
+        # Predicted
+        u_pred = torch.sum(tau[0] * beta, axis = 1)[:, None]
+       
+
+        # Ground Trust
+        u_GT = self.u_data_tensor
+        
+        # Compute losses
+        u_loss = self.loss_fn(u_pred, u_GT)
+
+    
+        return u_loss
+    
+    def loss_initial_condition(self):
+
+        tau = []
+        for i, f_ic_tensor_i in enumerate(self.f_ic_tensor):
+            tau.append(self.model.branch_list[i](f_ic_tensor_i))
+ 
+        beta = self.model.trunk(self.xt_ic_tensor)
+
+        ## np.tile
+        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+
+        # Predicted
+        u_pred = torch.sum(tau[0] * beta, axis = 1)[:, None]
+       
+
+        # Ground Trust
+        u_GT = self.u_ic_tensor
+        
+        # Compute losses
+        u_loss = self.loss_fn(u_pred, u_GT)
+
+    
+        return u_loss
+    
+    def loss_physics(self):
+
+        # forward pass
+        tau = []
+        for i, f_phy_tensor_i in enumerate(self.f_phy_tensor):
+            tau.append(self.model.branch_list[i](f_phy_tensor_i))
+
+        beta = self.model.trunk(torch.cat([self.x_phy, self.t_phy], 1))
+
+        ## np.tile
+        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+
+        # Predicted
+        if len(self.config['branches_control']['branch_list_ID']) == 1:
+            u = torch.sum(tau[0] * beta, axis = 1)[:, None]
+
+        # Autodiff
+        u_x = torch.autograd.grad(
+            u, self.x_phy, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+
+        u_t = torch.autograd.grad(
+            u, self.t_phy, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+
+
+        EQ1 = u_t + self.c_tensor *  u_x 
+       
+
+        # Compute losses
+        loss = self.loss_fn(EQ1, self.residual_target)
+       
+        return loss
+        
+    def loss(self):
+
+        # Forward pass and compute the losses per terms
+        loss_ic = self.loss_initial_condition()
+        loss_data = self.loss_data()
+        loss_p = self.loss_physics()
+
+        self.term_loss_tensor_dict['ic'] = loss_ic
+        self.term_loss_tensor_dict['data'] = loss_data
+        self.term_loss_tensor_dict['phy'] = loss_p
+        
+        # Apply adaptive lambdas
+        self.loss_balancing_call()
+        
+    
+        # Compute total loss
+        loss_total = self.term_lambdas_tensor_dict['ic'] * loss_ic + self.term_lambdas_tensor_dict['data'] * loss_data + self.term_lambdas_tensor_dict['phy'] * loss_p 
+
+
+        return loss_total
+    
+    def compute_loss_total_and_backward(self):
+        self.optimizer_Adam.zero_grad()
+        loss_total = self.loss()
+        loss_total.backward()
+        return loss_total
+    
+    def loss_balancing_call(self):
+        
+        # Update Lambdas
+        if self.has_loss_balancing:
+            if self.regular_iter % self.config['loss_balancing']['update_step'] == 0 or self.regular_iter == self.last_iter:
+                self.loss_balancing_method()
+        
+        # Update lambdas dict
+        for idx, key in enumerate(self.config['loss_terms']):
+            self.term_lambdas_tensor_dict[key] = self.term_lambdas_tensor[idx]
+    
+    def loss_balancing_method(self):
+
+        for key in self.config['loss_terms']:
+            self.term_loss_tensor_dict[key].backward(retain_graph=True)
+
+            if self.has_random_weight_fact:
+                all_param_grads = self.loss_balancing_save_grads_RWF(self.model.mlp, self.term_grad_dict[key])
+            else:
+                all_param_grads = self.loss_balancing_save_grads(self.model.mlp, self.term_grad_dict[key])
+            
+            
+            # Paper 1 'sum(norm) / norm': Wang et al. 2023 An Expert's Guide ...
+            self.global_hat_lambdas[key] = np.linalg.norm(all_param_grads) 
+
+            self.optimizer_Adam.zero_grad() #### NEEDED FOR THE OPTIMIZER
+
+        
+        # Paper 1 'sum(norm) / norm': Wang et al. 2023 An Expert's Guide ...
+        total_sum = sum(self.global_hat_lambdas.values())
+        new_lambs_hat = torch.tensor([total_sum / self.global_hat_lambdas[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
+        # new_lambs_hat = torch.tensor([total_sum/(self.global_hat_lambdas[key] + self.config['loss_balancing']['EPS']) for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
+        
+        # Compute new lambdas
+        new_lambs = self.config['loss_balancing']['momentum'] * self.term_lambdas_tensor + (1 - self.config['loss_balancing']['momentum']) * new_lambs_hat
+        
+        # Update lambdas
+        self.term_lambdas_tensor = new_lambs
+    
+    def loss_balancing_save_grads_RWF(self, mlp, term_grad_dict_key):
+
+        all_param_grads = np.array([])
+
+        for i,key in enumerate(term_grad_dict_key.keys()):
+            
+            if i <= self.config['neuralNet']['num_layers']:
+                s = mlp.param_groups[3*i]['params'][0]
+                v = mlp.param_groups[3*i+1]['params'][0]
+                bias = mlp.param_groups[3*i+2]['params'][0]
+
+                # Standard Dense 
+                if s.grad is None:
+                    print(f'\n s -> SKIP LAYER - standard dense {2*i}')
+                else:
+                    s_grad = s.grad.cpu().numpy()
+                    term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
+                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
+                
+                if v.grad is None:
+                    print(f'\n v -> SKIP LAYER - standard dense {2*i}')
+                else:
+                    v_grad = v.grad.cpu().numpy()
+                    term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
+                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
+
+
+                if bias.grad is None:
+                    print(f'\n Bias -> SKIP LAYER - standard dense {2*i}')
+                else:
+                    bias_grad = bias.grad.cpu().numpy()
+                    term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
+                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
+            else:
+
+                if key == 'encoder_dense1_layer0':
+                    s = mlp.param_groups[3*i]['params'][0]
+                    v = mlp.param_groups[3*i+1]['params'][0]
+                    bias = mlp.param_groups[3*i+2]['params'][0]
+
+                    # Encoder Dense (Modified MLP)
+                    if s.grad is None:
+                        print(f'\n s -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        s_grad = s.grad.cpu().numpy()
+                        term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
+                    
+                    if v.grad is None:
+                        print(f'\n v -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        v_grad = v.grad.cpu().numpy()
+                        term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
+
+
+                    if bias.grad is None:
+                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        bias_grad = bias.grad.cpu().numpy()
+                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
+               
+                else: # 'encoder_dense2_layer0'
+                    s = mlp.param_groups[3*i]['params'][0]
+                    v = mlp.param_groups[3*i+1]['params'][0]
+                    bias = mlp.param_groups[3*i+2]['params'][0]
+
+                   # Encoder Dense (Modified MLP)
+                    if s.grad is None:
+                        print(f'\n s -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        s_grad = s.grad.cpu().numpy()
+                        term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
+                    
+                    if v.grad is None:
+                        print(f'\n v -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        v_grad = v.grad.cpu().numpy()
+                        term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
+
+
+                    if bias.grad is None:
+                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        bias_grad = bias.grad.cpu().numpy()
+                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
+
+        return all_param_grads
+    
+    def loss_balancing_save_grads(self, mlp, term_grad_dict_key):
+
+        all_param_grads = np.array([])
+
+        for i,key in enumerate(term_grad_dict_key.keys()):
+            
+            if i <= self.config['neuralNet']['num_layers']:
+                # Standard Dense 
+                if mlp.standard_dense.net[2*i].weight.grad is None:
+                    print(f'\n Weights -> SKIP LAYER - standard dense {2*i}')
+                else:
+                    weight_grad = mlp.standard_dense.net[2*i].weight.grad.cpu().numpy()
+                    term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
+                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
+
+
+                if mlp.standard_dense.net[2*i].bias.grad is None:
+                    print(f'\n Bias -> SKIP LAYER - standard dense {2*i}')
+                else:
+                    bias_grad = mlp.standard_dense.net[2*i].bias.grad.cpu().numpy()
+                    term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
+                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
+            else:
+
+                if key == 'encoder_dense1_layer0':
+                    # Encoder Dense (Modified MLP)
+                    if mlp.encoder_dense1.net[0].weight.grad is None:
+                        print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        weight_grad = mlp.encoder_dense1.net[0].weight.grad.cpu().numpy()
+                        term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
+
+
+                    if mlp.encoder_dense1.net[0].bias.grad is None:
+                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        bias_grad = mlp.encoder_dense1.net[0].bias.grad.cpu().numpy()
+                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
+               
+                else: # 'encoder_dense2_layer0'
+                   # Encoder Dense (Modified MLP)
+                    if mlp.encoder_dense2.net[0].weight.grad is None:
+                        print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        weight_grad = mlp.encoder_dense2.net[0].weight.grad.cpu().numpy()
+                        term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
+
+
+                    if mlp.encoder_dense2.net[0].bias.grad is None:
+                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
+                    else:
+                        bias_grad = mlp.encoder_dense2.net[0].bias.grad.cpu().numpy()
+                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
+                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
+
+        return all_param_grads
+    
+    def logger_call(self):
+        
+        # Total and term losses
+        loss_train = self.total_loss
+        l2_error_u = self.l2_error_u
+        # l2_error_pressure = self.l2_error_pressure
+        
+        # Access to the learning rate
+        lr = self.optimizer_Adam.param_groups[0]['lr']
+        
+        # LOG
+        runtime1 = time.time()
+        runtime_iter = (runtime1 - self.runtime0)/60
+        self.runtime0 = runtime1 
+        
+
+        self.log_log = self.log_log + \
+"\n---------------------------\n" + \
+f"""Iter: {(self.regular_iter)}/{(self.last_iter)} - Time: {round(runtime_iter,4)}min""" + \
+"\n---------------------------\n" + \
+f"""- total_loss_train: {loss_train} \n- l2_relative_error - u: {l2_error_u} \n\n- lr: {lr}\n\n""" 
+
+        for key in self.config['loss_terms']:
+            self.log_log = self.log_log + \
+f"""- {key}_loss: {self.term_loss_tensor_dict[key].item()}\n"""
+
+
+        # Loss balancing log
+        self.log_log = self.log_log +"\n"
+        
+        for key in self.config['loss_terms']:
+            self.log_log = self.log_log + \
+f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
+     
+        # Monitoring resources 
+        if self.config['logging']['monitoring_resources']:
+            gpu_load, gpu_memory = get_gpu_usage()
+            if gpu_load is not None:
+                self.log_log = self.log_log + \
+"\n---------\n" + \
+f"""- CPU usage: {get_cpu_usage()}% \n""" + \
+f"""- Memory usage: {get_memory_usage()}MB \n""" + \
+f"""- GPU usage: {gpu_load}% \n""" + \
+f"""- GPU memory usage: {gpu_memory}MB \n"""
+            else:
+                self.log_log = self.log_log + \
+"\n---------\n" + \
+f"""- CPU usage: {get_cpu_usage()}% \n""" + \
+f"""- Memory usage: {get_memory_usage()}MB \n""" + \
+f"""- No GPU detected \n"""
+                
+        # Save into a .txt file
+        with open(self.config['train_progress_file_path'], 'w') as file:
+            file.write(self.log_log)
+        
+        # Tensorboard
+        self.writer.add_scalar('total_loss', self.total_loss, self.regular_iter)
+        self.writer.add_scalar('l2_error_u', self.l2_error_u, self.regular_iter)
+        # self.writer.add_scalar('l2_error_pressure', self.l2_error_pressure, self.regular_iter)
+        self.writer.add_scalar('lr', lr, self.regular_iter)
+        for key in self.config['loss_terms']: 
+            self.writer.add_scalar(f'{key}_loss', self.term_loss_tensor_dict[key].item(), self.regular_iter)
+            self.writer.add_scalar(f'{key}_lambdas', self.term_lambdas_tensor_dict[key].item(), self.regular_iter)
+    
+    def checkpoint_call(self, tracking_param):
+        
+        # Checkpoints
+        if tracking_param < self.min_error_for_checkpoint:
+        
+            directory = self.config['checkpoints_folder_path']
+
+            # Construct the full path for files
+            filename_model_weights = f"model_weights.pt"
+            path_model_weights = directory.joinpath(filename_model_weights)
+           
+            ## Save model weights based on the tracking_param
+            model_weights = {}
+            for i in range(len(self.model.branch_list)):
+                end_string = '_state_dict'
+                key = self.config['branches_control']['branch_list_ID'][i] + end_string
+                aux_dict = {key: self.model.branch_list[i].state_dict()}
+                model_weights.update(aux_dict)
+            
+            model_weights.update({'trunk_state_dict': self.model.trunk.state_dict()})
+
+            torch.save(model_weights, path_model_weights)
+
+            # Update for next iteration
+            self.min_error_for_checkpoint = tracking_param 
+            self.best_iter = self.regular_iter 
+            self.config['logger'].info(f'New best iteration {self.best_iter} registered.')
+
+    def collocation_points_generator(self, batch_size_coll, coordinates, time_min, time_max):
+       
+        N_coord = coordinates.shape[0]
+
+        if N_coord < batch_size_coll:
+            x_idx = np.random.choice(N_coord, N_coord, replace=False)  # Select all elements if N_coord < batch_size_coll
+        else:
+            x_idx = np.random.choice(N_coord, batch_size_coll, replace=False)
+        x = coordinates[x_idx]
+
+        #We will consider time values in the interval min(time_vector) and max(time_vector)
+        t = np.sort(np.random.uniform(time_min, time_max, batch_size_coll))
+
+        return x[:,0][:,None], t[:,None]
+
+    def random_sampling(self, xt, u, label = 'val'):
+        """Return a random uniform sample of coordinate points from label with their respective velocities and pressure.
+        """
+        N_coord = xt.shape[0]
+        idx = np.random.choice(N_coord,  round(self.config['train'][f'batch_dfraction'][label]*N_coord), replace=False)
+        
+        idx = np.sort(idx)
+
+        return idx
+    
+    def train(self, timePrm, full_ds, dataPrm, val_ds):
+        
+        print("### TRAINING ... ###")
+
+        self.last_iter = self.config['train']['adam_steps'] + self.config['train']['lbfgs_steps'] - 1
+        self.regular_iter = 0
+
+        time_vector = timePrm.time_vector[:,None]
+
+        xt_ic = {} 
+        u_ic = {} 
+        
+        xt_data = {} 
+        u_data = {} 
+        
+        xt_val = {} 
+        u_val = {}
+      
+        c_list = []
+
+        for chosen_flow_label in self.config['train']['training_param_label']:
+
+
+            #---------------------
+            # Fixed dataset
+            #---------------------
+            ## BOUNDARY CONDITIONS AND INITIAL CONDITION
+            xt_ic[chosen_flow_label], u_ic[chosen_flow_label]= craft_bc_and_ic_dataset(full_ds[chosen_flow_label], time_vector)
+            
+            ## DATA 
+            xt_data[chosen_flow_label], u_data[chosen_flow_label] = build_stratum_dataset(dataPrm[chosen_flow_label], time_vector)
+
+            ## VALIDATION DATASET
+            xt_val[chosen_flow_label], u_val[chosen_flow_label] = craft_validation_dataset(val_ds[chosen_flow_label], time_vector)
+
+            c_list.append(self.c_dict[chosen_flow_label])
+
+        # """The coordinate points are the same between the different datasets, so we can choose a geometry among the options"""
+        coordinates, time_min, time_max = get_coordinates_for_generator(full_ds[self.config['train']['training_param_label'][0]], time_vector)
+
+        # c parameter - For Loss PHY
+        c_array = np.tile(np.array(c_list), self.config['train']['batch_size_coll'])
+        self.c_tensor = torch.tensor(c_array[:,None], dtype = torch.float32, requires_grad= False).to(self.config['device'])
+
+        # Workflow
+        self.custom_bar = trange(self.last_iter + 1)
+        
+        for regular_iter in self.custom_bar:
+
+            self.regular_iter = regular_iter
+
+            # Branch
+            branch_input = {}
+            for key in self.config['branches_control']['branch_input_ID']:
+                branch_input.update({key:[]})
+
+            # Trunk
+            xt_ic_sample_all = []
+            u_ic_target = []
+           
+            xt_data_sample_all = []
+            u_data_target = []
+
+           
+            # Val
+            xt_val_sample_all = []
+            u_val_target = []
+           
+
+            ## Random Sampling - Get Indexes
+            # IC 
+            idx_ic = self.random_sampling(xt_ic[chosen_flow_label], u_ic[chosen_flow_label], label = 'ic')
+            
+            # DATA 
+            idx_data = self.random_sampling(xt_data[chosen_flow_label], u_data[chosen_flow_label], label = 'data')
+
+            # VAL 
+            idx_val = self.random_sampling(xt_val[chosen_flow_label], u_val[chosen_flow_label], label = 'val')
+
+            for chosen_flow_label in self.config['train']['training_param_label']:
+                
+                # IC 
+                xt_ic_sample =  xt_ic[chosen_flow_label][idx_ic]
+                u_ic_sample = u_ic[chosen_flow_label][idx_ic]
+                
+                # DATA 
+                xt_data_sample =  xt_data[chosen_flow_label][idx_data]
+                u_data_sample = u_data[chosen_flow_label][idx_data]
+
+                # VAL 
+                xt_val_sample = xt_val[chosen_flow_label][idx_val]
+                u_val_sample = u_val[chosen_flow_label][idx_val]
+
+                # Branch
+                branch_input[self.config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([self.c_dict[chosen_flow_label]]),90)[None,:])
+
+
+                ## Trunk
+                xt_ic_sample_all.append(xt_ic_sample)
+                u_ic_target.append(u_ic_sample)
+                
+                xt_data_sample_all.append(xt_data_sample)
+                u_data_target.append(u_data_sample)
+
+                xt_val_sample_all.append(xt_val_sample)
+                u_val_target.append(u_val_sample)
+
+            # Trunk
+            xt_ic_sample_all = np.array(xt_ic_sample_all)
+            u_ic_target = np.array(u_ic_target)
+            
+            xt_data_sample_all = np.array(xt_data_sample_all)
+            u_data_target = np.array(u_data_target)
+
+            xt_val_sample_all = np.array(xt_val_sample_all)
+            u_val_target = np.array(u_val_target)
+            
+            # IC
+            # N = 4, P = 1800 
+            self.xt_ic_tensor = torch.tensor(np.swapaxes(xt_ic_sample_all,0,1).reshape(-1,self.trunk_in_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+            
+            # self.f_ic_tensor = []
+            # for key in branch_input.keys():
+            #     f_ic_array = np.tile(np.array(branch_input[key]), (xyzt_ic_sample.shape[0],1))
+            #     self.f_ic_tensor.append(torch.tensor(f_ic_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
+            self.f_ic_tensor = []
+            num_samples = xt_ic_sample.shape[0]  # 51850
+            target_device = self.config['device']
+
+            for key in branch_input.keys():
+                
+                base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]),dtype=torch.float32,device=target_device)
+                
+                final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+                
+                self.f_ic_tensor.append(final_view)
+            
+            self.u_ic_tensor = torch.tensor(np.swapaxes(u_ic_target,0,1).reshape(-1,self.output_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+            
+            # DATA
+            self.xt_data_tensor = torch.tensor(np.swapaxes(xt_data_sample_all,0,1).reshape(-1,self.trunk_in_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+            
+            self.f_data_tensor = []
+            num_samples = xt_data_sample.shape[0]  
+            target_device = self.config['device']
+
+            for key in branch_input.keys():
+                
+                base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]),dtype=torch.float32,device=target_device)
+                
+                final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+                
+                self.f_data_tensor.append(final_view)
+            
+            self.u_data_tensor = torch.tensor(np.swapaxes(u_data_target,0,1).reshape(-1,self.output_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+            
+            
+            
+           
+            # Validation dataset
+            # N = 5, P = xyzt_val_fixed.shape[0]
+            self.xt_val_tensor = torch.tensor(np.swapaxes(xt_val_sample_all,0,1).reshape(-1,self.trunk_in_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+            
+            
+            self.f_val_tensor = []
+            num_samples = xt_val_sample.shape[0] 
+            target_device = self.config['device']
+
+            for key in branch_input.keys():
+
+
+                base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]), dtype=torch.float32, device=target_device)
+               
+                final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+               
+                self.f_val_tensor.append(final_view)
+            
+            self.u_val_tensor = torch.tensor(np.swapaxes(u_val_target,0,1).reshape(-1,self.output_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+           
+
+            ## COLLOCATION POINTS
+            # Random sample
+            x_phy, t_phy = self.collocation_points_generator(self.config['train']['batch_size_coll'], coordinates, time_min, time_max)
+
+            # N = 4, P = batch_size_coll
+            x_phy_array = np.repeat(x_phy, self.config['train']['n_training_param'], axis=0)
+            t_phy_array = np.repeat(t_phy, self.config['train']['n_training_param'], axis=0)
+
+            self.x_phy = torch.tensor(x_phy_array, dtype = torch.float32, requires_grad= True).to(self.config['device'])
+            self.t_phy = torch.tensor(t_phy_array, dtype = torch.float32, requires_grad= True).to(self.config['device'])
+
+            
+            self.f_phy_tensor = []
+            num_samples = self.config['train']['batch_size_coll']  # 1024
+            target_device = self.config['device']
+
+            for key in branch_input.keys():
+                
+                base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]),dtype=torch.float32,device=target_device)
+               
+                final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+              
+                self.f_phy_tensor.append(final_view)
+            
+            self.residual_target = torch.zeros((self.x_phy.shape[0],1), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+
+
+        
+            # Compute total loss, apply backward pass and optimize
+            loss_total = self.compute_loss_total_and_backward()
+            self.optimizer_Adam.step()
+
+            # Store batch losses
+            self.total_loss = loss_total.item()
+
+
+            # Compute l2 relative error with Validation dataset
+            ## REFERENCE
+            u_ref = self.u_val_tensor
+            
+
+            ## PREDICTED
+            with torch.no_grad():
+                tau = []
+                for i, f_star_tensor_i in enumerate(self.f_val_tensor):
+                    tau.append(self.model.branch_list[i](f_star_tensor_i))
+                
+                beta = self.model.trunk(self.xt_val_tensor)
+
+                tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+
+            u_pred = torch.sum(tau[0] * beta, axis = 1)[:, None]
+               
+            
+            l2_relative_error_u = metric_l2_relative_error(exact = u_ref, pred = u_pred)
+            
+           
+            # Store errors
+            self.l2_error_u = l2_relative_error_u.item()
+           
+
+            # -------------
+            if self.regular_iter % self.config['logging']['log_every_steps'] == 0 or self.regular_iter == self.last_iter:
+                self.logger_call()
+
+            self.checkpoint_call(self.total_loss)
+
+            # Conditions to stop the loop
+            if self.regular_iter == self.config['train']['stop_iter']:
+                self.logger_call()
+                break
+            
+            if self.has_exponential_decay:
+                self.scheduler_Adam.step()
+            # -------------
+
+        self.config['logger'].info("###-----------------------------------------###")
+        self.config['logger'].info("### The best model is obtained in iteration = " + f"{self.best_iter}" + " with a total_loss = " + f"{self.min_error_for_checkpoint}.") 
 
 
 class Trainer_PIDeepONet(nn.Module):
@@ -1126,1086 +1886,7 @@ f"""- No GPU detected \n"""
         self.config['logger'].info("### The best model is obtained in iteration = " + f"{self.best_iter}" + " with a total_loss = " + f"{self.min_error_for_checkpoint}.")
 
 
-class Trainer_DeepONet(nn.Module):
-    
-    def __init__(self, config, model):
-        
-        pass
 
-
-
-class Trainer_PIDeepONetLdata(nn.Module):
-    
-    def __init__(self, config, model):
-        
-        super().__init__()
-        
-        self.config = config
-        self.has_random_weight_fact = self.config['random_weight_fact']['enabled']
-        self.has_loss_balancing = self.config['loss_balancing']['enabled']
-        self.has_exponential_decay = self.config['optim1']['exponential_decay']['enabled']
-
-        # Initialize the SummaryWriter
-        if self.config['mode']=='train':
-            self.writer = SummaryWriter(log_dir=config['logs_folder_path'])
-
-        self.model = model
-        
-        # PDE parameters
-        self.Wo = self.config['pde_param']['Wo']
-        self.Re_dict = self.config['pde_param']['Re']
-
-         # Optimizers
-        if config['optim1']['optimizer'] == 'Adam':
-
-            # Retrieve parameter groups from each model
-            param_groups_branch_sum = []
-            for branch in self.model.branch_list:
-                param_groups_branch_i = list(branch.param_groups)
-                param_groups_branch_sum += param_groups_branch_i
-            
-            param_groups_trunk = list(self.model.trunk.param_groups)
-
-            # Combine the parameter groups into a single list
-            combined_param_groups = param_groups_branch_sum + param_groups_trunk
-
-            self.optimizer_Adam = torch.optim.Adam(combined_param_groups, lr=config['optim1']['learning_rate'], \
-                                                    betas=(config['optim1']['beta1'], config['optim1']['beta2']), \
-                                                    eps=config['optim1']['eps'] )
-            
-            if self.has_exponential_decay:
-                def lr_lambda_func(current_step):
-                    """Custom function for the exponential decay."""
-                    
-                    decay_rate = self.config['optim1']['exponential_decay']['decay_rate']
-                    decay_steps = self.config['optim1']['exponential_decay']['decay_steps']
-
-                    factor = decay_rate ** (current_step / decay_steps)
-
-                    return factor
-
-                self.scheduler_Adam = torch.optim.lr_scheduler.LambdaLR(self.optimizer_Adam, lr_lambda_func)
-        
-        if config['optim2']['optimizer'] == 'LBFGS':
-
-            # Extract parameters from custom parameter groups
-            all_params = [param for group in self.model.branch_list[0].param_groups + self.model.trunk.param_groups for param in group['params']]
-            # all_params = [param for group in self.model.branch_list[0].param_groups + self.model.branch_list[1].param_groups + self.model.trunk.param_groups for param in group['params']]
-            # all_params = [param for group in self.model.mlp.param_groups for param in group['params']]
-            
-            self.optimizer_LBFGS = torch.optim.LBFGS(all_params, max_iter=config['optim2']['max_iter'], max_eval=config['optim2']['max_eval'], tolerance_grad=1.0 * torch.finfo(torch.float32).eps, history_size=50)
-
-        
-        # Loss function
-        self.loss_fn = torch.nn.MSELoss(reduction='mean')
-        
-
-        # Logging
-        self.total_loss = None
-        self.l2_error_vel = None
-        self.l2_error_pressure = None
-
-        # Loss terms
-        self.term_loss_tensor_dict = {key:[] for key in self.config['loss_terms']}
-
-        # lambdas initialization
-        self.term_lambdas_tensor = torch.tensor(
-                                    [self.config['lambda_weights_init'][i] for i in range(len(self.config['loss_terms']))], 
-                                    dtype=torch.float32, requires_grad=False).to(self.config['device'])
-
-        self.term_lambdas_tensor_dict = {key: self.term_lambdas_tensor[i] for i,key in enumerate(self.config['loss_terms'])}
-
-    
-        # if self.has_loss_balancing:           
-        #     self.loss_balancing_log = f"""Loss Balancing - {self.config['loss_balancing']['scheme']}\n"""
-        
-        # if self.has_random_weight_fact:
-        #     self.term_grad_dict = {}
-        #     for key in self.config['loss_terms']:
-        #         self.term_grad_dict[key] = {}
-        #         for n in range(config['neuralNet']['num_layers'] + 1):
-        #             self.term_grad_dict[key][f'standard_dense_layer{2*n}'] = {'s': [],'v': [], 'bias': []}
-            
-        #     self.global_hat_lambdas = {key:[] for key in self.config['loss_terms']}
-
-        #     if self.config["neuralNet"]["architecture"] == "Modified MLP":
-        #         for key in self.config['loss_terms']:
-        #             self.term_grad_dict[key].update({f'encoder_dense1_layer{0}' : {'s': [],'v': [], 'bias': []}})
-        #             self.term_grad_dict[key].update({f'encoder_dense2_layer{0}' : {'s': [],'v': [], 'bias': []}})
-        
-        # else:
-        #     self.term_grad_dict = {}
-        #     for key in self.config['loss_terms']:
-        #         self.term_grad_dict[key] = {}
-        #         for n in range(config['neuralNet']['num_layers'] + 1):
-        #             self.term_grad_dict[key][f'standard_dense_layer{2*n}'] = {'weight': [], 'bias': []}
-            
-        #     self.global_hat_lambdas = {key:[] for key in self.config['loss_terms']}
-
-        #     if self.config["neuralNet"]["architecture"] == "Modified MLP":
-        #         for key in self.config['loss_terms']:
-        #             self.term_grad_dict[key].update({f'encoder_dense1_layer{0}' : {'weight': [], 'bias': []}})
-        #             self.term_grad_dict[key].update({f'encoder_dense2_layer{0}' : {'weight': [], 'bias': []}})
-
-    
-        self.log_log = """LOG\n"""
-        self.min_error_for_checkpoint = np.Infinity
-        self.runtime0 = self.config['tick_start']
-        self.best_iter = 0
-
-    def loss_data(self):
-
-        tau = []
-        for i, f_data_tensor_i in enumerate(self.f_data_tensor):
-            tau.append(self.model.branch_list[i](f_data_tensor_i))
-        beta = self.model.trunk(self.xyzt_data_tensor)
-
-        # Predicted
-        if len(self.config['branches_control']['branch_list_ID']) == 1:
-            v1_pred = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-            p_pred = torch.sum(tau[0][:,300:400] * beta[:,300:400], axis = 1)[:, None]
-        else:
-            v1_pred = torch.sum(reduce(lambda x, y: x[:, 0:100] * y[:, 0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-            p_pred = torch.sum(reduce(lambda x, y: x[:,300:400] * y[:,300:400], tau) * beta[:,300:400], axis = 1)[:, None]
-
-        # Ground Trust
-        v1_GT = self.vel_data_tensor[:, 0:1]
-        v2_GT = self.vel_data_tensor[:, 1:2]
-        v3_GT = self.vel_data_tensor[:, 2:3]
-        p_GT = self.pressure_data_tensor[:, 0:1]
-
-        # Compute losses
-        v1_loss = self.loss_fn(v1_pred, v1_GT)
-        v2_loss = self.loss_fn(v2_pred, v2_GT)
-        v3_loss = self.loss_fn(v3_pred, v3_GT)
-        p_loss = self.loss_fn(p_pred, p_GT)
-
-        loss = v1_loss + v2_loss + v3_loss + p_loss
-
-        return loss
-    
-    def loss_initial_condition(self):
-
-        tau = []
-        for i, f_ic_tensor_i in enumerate(self.f_ic_tensor):
-            tau.append(self.model.branch_list[i](f_ic_tensor_i))
- 
-        beta = self.model.trunk(self.xyzt_ic_tensor)
-
-        # Predicted
-        if len(self.config['branches_control']['branch_list_ID']) == 1:
-            v1_pred = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-        else:
-            v1_pred = torch.sum(reduce(lambda x, y: x[:, 0:100] * y[:, 0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-        
-        # Ground Trust
-        v1_GT = self.vel_ic_tensor[:, 0:1]
-        v2_GT = self.vel_ic_tensor[:, 1:2]
-        v3_GT = self.vel_ic_tensor[:, 2:3]
-
-        # Compute losses
-        v1_loss = self.loss_fn(v1_pred, v1_GT)
-        v2_loss = self.loss_fn(v2_pred, v2_GT)
-        v3_loss = self.loss_fn(v3_pred, v3_GT)
-
-        loss = v1_loss + v2_loss + v3_loss
-
-        return loss
-    
-    def loss_boundary_inlet(self):
-
-        tau = []
-        for i, f_bc_inlet_tensor_i in enumerate(self.f_bc_inlet_tensor):
-            tau.append(self.model.branch_list[i](f_bc_inlet_tensor_i))
- 
-        beta = self.model.trunk(self.xyzt_bc_inlet_tensor)
-
-        # Predicted
-        if len(self.config['branches_control']['branch_list_ID']) == 1:
-            v1_pred = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-        else:
-            v1_pred = torch.sum(reduce(lambda x, y: x[:, 0:100] * y[:, 0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-        
-        # Ground Trust
-        v1_GT = self.vel_bc_inlet_tensor[:, 0:1]
-        v2_GT = self.vel_bc_inlet_tensor[:, 1:2]
-        v3_GT = self.vel_bc_inlet_tensor[:, 2:3]
-
-        # Compute losses
-        v1_loss = self.loss_fn(v1_pred, v1_GT)
-        v2_loss = self.loss_fn(v2_pred, v2_GT)
-        v3_loss = self.loss_fn(v3_pred, v3_GT)
-
-        loss = v1_loss + v2_loss + v3_loss
-
-        return loss
-        
-    def loss_boundary_wall(self):
-
-        tau = []
-        for i, f_bc_wall_tensor_i in enumerate(self.f_bc_wall_tensor):
-            tau.append(self.model.branch_list[i](f_bc_wall_tensor_i))
-
-        beta = self.model.trunk(self.xyzt_bc_wall_tensor)
-
-        # Predicted
-        if len(self.config['branches_control']['branch_list_ID']) == 1:
-            v1_pred = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-        else:
-            v1_pred = torch.sum(reduce(lambda x, y: x[:, 0:100] * y[:, 0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-            
-            
-        # Ground Trust
-        v1_GT = self.vel_bc_wall_tensor[:, 0:1]
-        v2_GT = self.vel_bc_wall_tensor[:, 1:2]
-        v3_GT = self.vel_bc_wall_tensor[:, 2:3]
-
-        # Compute losses
-        v1_loss = self.loss_fn(v1_pred, v1_GT)
-        v2_loss = self.loss_fn(v2_pred, v2_GT)
-        v3_loss = self.loss_fn(v3_pred, v3_GT)
-
-        loss = v1_loss + v2_loss + v3_loss
-
-        return loss
-
-    def loss_boundary_outlet(self):
-        
-        tau = []
-        for i, f_bc_outlet_tensor_i in enumerate(self.f_bc_outlet_tensor):
-            tau.append(self.model.branch_list[i](f_bc_outlet_tensor_i))
-        beta = self.model.trunk(self.xyzt_bc_outlet_tensor)
-        
-
-        # Predicted
-        if len(self.config['branches_control']['branch_list_ID']) == 1:
-            v1_pred = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-        else:
-            v1_pred = torch.sum(reduce(lambda x, y: x[:, 0:100] * y[:, 0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-            v2_pred = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-            v3_pred = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-            
-            
-        # Ground Trust
-        v1_GT = self.vel_bc_outlet_tensor[:, 0:1]
-        v2_GT = self.vel_bc_outlet_tensor[:, 1:2]
-        v3_GT = self.vel_bc_outlet_tensor[:, 2:3]
-
-        # Compute losses
-        v1_loss = self.loss_fn(v1_pred, v1_GT)
-        v2_loss = self.loss_fn(v2_pred, v2_GT)
-        v3_loss = self.loss_fn(v3_pred, v3_GT)
-
-        loss = v1_loss + v2_loss + v3_loss
-
-        return loss
-
-    def loss_physics(self):
-
-        # forward pass
-        tau = []
-        for i, f_phy_tensor_i in enumerate(self.f_phy_tensor):
-            tau.append(self.model.branch_list[i](f_phy_tensor_i))
-
-        beta = self.model.trunk(torch.cat([self.x_phy, self.y_phy, self.z_phy, self.t_phy], 1))
-
-        # Predicted
-        if len(self.config['branches_control']['branch_list_ID']) == 1:
-            v1 = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-            v2 = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-            v3 = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-            p = torch.sum(tau[0][:,300:400] * beta[:,300:400], axis = 1)[:, None]
-        else:
-            v1 = torch.sum(reduce(lambda x, y: x[:, 0:100] * y[:, 0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-            v2 = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-            v3 = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-            p = torch.sum(reduce(lambda x, y: x[:,300:400] * y[:,300:400], tau) * beta[:,300:400], axis = 1)[:, None]
-            
-        # Autodiff
-        v1_x = torch.autograd.grad(
-            v1, self.x_phy, grad_outputs=torch.ones_like(v1), create_graph=True)[0]
-        v1_y = torch.autograd.grad(
-            v1, self.y_phy, grad_outputs=torch.ones_like(v1), create_graph=True)[0]
-        v1_z = torch.autograd.grad(
-            v1, self.z_phy, grad_outputs=torch.ones_like(v1), create_graph=True)[0]
-        v1_t = torch.autograd.grad(
-            v1, self.t_phy, grad_outputs=torch.ones_like(v1), create_graph=True)[0]
-        
-
-        v1_xx = torch.autograd.grad(
-            v1_x, self.x_phy, grad_outputs=torch.ones_like(v1_x), create_graph=True)[0]
-        v1_yy = torch.autograd.grad(
-            v1_y, self.y_phy, grad_outputs=torch.ones_like(v1_y), create_graph=True)[0]
-        v1_zz = torch.autograd.grad(
-            v1_z, self.z_phy, grad_outputs=torch.ones_like(v1_z), create_graph=True)[0]
-
-        v2_x = torch.autograd.grad(
-            v2, self.x_phy, grad_outputs=torch.ones_like(v2), create_graph=True)[0]
-        v2_y = torch.autograd.grad(
-            v2, self.y_phy, grad_outputs=torch.ones_like(v2), create_graph=True)[0]
-        v2_z = torch.autograd.grad(
-            v2, self.z_phy, grad_outputs=torch.ones_like(v2), create_graph=True)[0]
-        v2_t = torch.autograd.grad(
-            v2, self.t_phy, grad_outputs=torch.ones_like(v2), create_graph=True)[0]
-        
-
-        v2_xx = torch.autograd.grad(
-            v2_x, self.x_phy, grad_outputs=torch.ones_like(v2_x), create_graph=True)[0]
-        v2_yy = torch.autograd.grad(
-            v2_y, self.y_phy, grad_outputs=torch.ones_like(v2_y), create_graph=True)[0]
-        v2_zz = torch.autograd.grad(
-            v2_z, self.z_phy, grad_outputs=torch.ones_like(v2_z), create_graph=True)[0]
-
-        v3_x = torch.autograd.grad(
-            v3, self.x_phy, grad_outputs=torch.ones_like(v3), create_graph=True)[0]
-        v3_y = torch.autograd.grad(
-            v3, self.y_phy, grad_outputs=torch.ones_like(v3), create_graph=True)[0]
-        v3_z = torch.autograd.grad(
-            v3, self.z_phy, grad_outputs=torch.ones_like(v3), create_graph=True)[0]
-        v3_t = torch.autograd.grad(
-            v3, self.t_phy, grad_outputs=torch.ones_like(v3), create_graph=True)[0]
-       
-
-        v3_xx = torch.autograd.grad(
-            v3_x, self.x_phy, grad_outputs=torch.ones_like(v3_x), create_graph=True)[0]
-        v3_yy = torch.autograd.grad(
-            v3_y, self.y_phy, grad_outputs=torch.ones_like(v3_y), create_graph=True)[0]
-        v3_zz = torch.autograd.grad(
-            v3_z, self.z_phy, grad_outputs=torch.ones_like(v3_z), create_graph=True)[0]
-
-        p_x = torch.autograd.grad(
-            p, self.x_phy, grad_outputs=torch.ones_like(p), create_graph=True)[0]
-        p_y = torch.autograd.grad(
-            p, self.y_phy, grad_outputs=torch.ones_like(p), create_graph=True)[0]
-        p_z = torch.autograd.grad(
-            p, self.z_phy, grad_outputs=torch.ones_like(p), create_graph=True)[0]
-
-        
-
-        EQ1 = self.Wo**2/self.Re_tensor * (v1_t) + v1 * v1_x + v2 * v1_y + v3 * v1_z + p_x - 1/self.Re_tensor*(v1_xx + v1_yy + v1_zz)
-        EQ2 = self.Wo**2/self.Re_tensor * (v2_t) + v1 * v2_x + v2 * v2_y + v3 * v2_z + p_y - 1/self.Re_tensor*(v2_xx + v2_yy + v2_zz)
-        EQ3 = self.Wo**2/self.Re_tensor * (v3_t) + v1 * v3_x + v2 * v3_y + v3 * v3_z + p_z - 1/self.Re_tensor*(v3_xx + v3_yy + v3_zz)
-        EQ4 = v1_x + v2_y + v3_z
-
-        # Compute losses
-        EQ1_loss = self.loss_fn(EQ1, self.residual_target)
-        EQ2_loss = self.loss_fn(EQ2, self.residual_target)
-        EQ3_loss = self.loss_fn(EQ3, self.residual_target)
-        EQ4_loss = self.loss_fn(EQ4, self.residual_target)
-
-    
-        loss = EQ1_loss + EQ2_loss + EQ3_loss + EQ4_loss
-
-        
-        return loss
-        
-    def loss(self):
-
-        # Forward pass and compute the losses per terms
-        loss_ic = self.loss_initial_condition()
-        loss_bc_inlet = self.loss_boundary_inlet()
-        loss_bc_wall = self.loss_boundary_wall()
-        loss_bc_outlet = self.loss_boundary_outlet()
-        loss_data = self.loss_data()
-        loss_p = self.loss_physics()
-
-        self.term_loss_tensor_dict['ic'] = loss_ic
-        self.term_loss_tensor_dict['bc_inlet'] = loss_bc_inlet
-        self.term_loss_tensor_dict['bc_wall'] = loss_bc_wall
-        self.term_loss_tensor_dict['bc_outlet'] = loss_bc_outlet
-        self.term_loss_tensor_dict['data'] = loss_data
-        self.term_loss_tensor_dict['phy'] = loss_p
-        
-        # self.term_loss_tensor_dict['ic'] = self.term_lambdas_tensor_dict['ic'] * loss_ic
-        # self.term_loss_tensor_dict['bc_inlet'] = self.term_lambdas_tensor_dict['bc_inlet'] * loss_bc_inlet
-        # self.term_loss_tensor_dict['bc_wall'] = self.term_lambdas_tensor_dict['bc_wall'] * loss_bc_wall
-        # self.term_loss_tensor_dict['bc_outlet'] = self.term_lambdas_tensor_dict['bc_outlet'] * loss_bc_outlet
-        # self.term_loss_tensor_dict['data'] = self.term_lambdas_tensor_dict['data'] * loss_data
-        # self.term_loss_tensor_dict['phy'] = self.term_lambdas_tensor_dict['phy'] * loss_p
-
-
-        # Apply adaptive lambdas
-        self.loss_balancing_call()
-        
-        
-        # Compute total loss
-        loss_total = self.term_lambdas_tensor_dict['data'] * loss_data + self.term_lambdas_tensor_dict['ic'] * loss_ic + self.term_lambdas_tensor_dict['bc_inlet'] * loss_bc_inlet + self.term_lambdas_tensor_dict['bc_wall'] * loss_bc_wall  + self.term_lambdas_tensor_dict['bc_outlet'] * loss_bc_outlet + self.term_lambdas_tensor_dict['phy'] * loss_p 
-
-
-        return loss_total
-    
-    def compute_loss_total_and_backward(self):
-        self.optimizer_Adam.zero_grad()
-        loss_total = self.loss()
-        loss_total.backward()
-        return loss_total
-    
-    def loss_balancing_call(self):
-        
-        # Update Lambdas
-        if self.has_loss_balancing:
-            if self.regular_iter % self.config['loss_balancing']['update_step'] == 0 or self.regular_iter == self.last_iter:
-                self.loss_balancing_method()
-        
-        # Update lambdas dict
-        for idx, key in enumerate(self.config['loss_terms']):
-            self.term_lambdas_tensor_dict[key] = self.term_lambdas_tensor[idx]
-    
-    def loss_balancing_method(self):
-
-        for key in self.config['loss_terms']:
-            self.term_loss_tensor_dict[key].backward(retain_graph=True)
-
-            if self.has_random_weight_fact:
-                all_param_grads = self.loss_balancing_save_grads_RWF(self.model.mlp, self.term_grad_dict[key])
-            else:
-                all_param_grads = self.loss_balancing_save_grads(self.model.mlp, self.term_grad_dict[key])
-            
-            
-            # Paper 1 'sum(norm) / norm': Wang et al. 2023 An Expert's Guide ...
-            self.global_hat_lambdas[key] = np.linalg.norm(all_param_grads) 
-
-            self.optimizer_Adam.zero_grad() #### NEEDED FOR THE OPTIMIZER
-
-        
-        # Paper 1 'sum(norm) / norm': Wang et al. 2023 An Expert's Guide ...
-        total_sum = sum(self.global_hat_lambdas.values())
-        new_lambs_hat = torch.tensor([total_sum / self.global_hat_lambdas[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
-        # new_lambs_hat = torch.tensor([total_sum/(self.global_hat_lambdas[key] + self.config['loss_balancing']['EPS']) for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
-        
-        # Compute new lambdas
-        new_lambs = self.config['loss_balancing']['momentum'] * self.term_lambdas_tensor + (1 - self.config['loss_balancing']['momentum']) * new_lambs_hat
-        
-        # Update lambdas
-        self.term_lambdas_tensor = new_lambs
-    
-    def loss_balancing_save_grads_RWF(self, mlp, term_grad_dict_key):
-
-        all_param_grads = np.array([])
-
-        for i,key in enumerate(term_grad_dict_key.keys()):
-            
-            if i <= self.config['neuralNet']['num_layers']:
-                s = mlp.param_groups[3*i]['params'][0]
-                v = mlp.param_groups[3*i+1]['params'][0]
-                bias = mlp.param_groups[3*i+2]['params'][0]
-
-                # Standard Dense 
-                if s.grad is None:
-                    print(f'\n s -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    s_grad = s.grad.cpu().numpy()
-                    term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
-                
-                if v.grad is None:
-                    print(f'\n v -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    v_grad = v.grad.cpu().numpy()
-                    term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
-
-
-                if bias.grad is None:
-                    print(f'\n Bias -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    bias_grad = bias.grad.cpu().numpy()
-                    term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-            else:
-
-                if key == 'encoder_dense1_layer0':
-                    s = mlp.param_groups[3*i]['params'][0]
-                    v = mlp.param_groups[3*i+1]['params'][0]
-                    bias = mlp.param_groups[3*i+2]['params'][0]
-
-                    # Encoder Dense (Modified MLP)
-                    if s.grad is None:
-                        print(f'\n s -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        s_grad = s.grad.cpu().numpy()
-                        term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
-                    
-                    if v.grad is None:
-                        print(f'\n v -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        v_grad = v.grad.cpu().numpy()
-                        term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
-
-
-                    if bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-               
-                else: # 'encoder_dense2_layer0'
-                    s = mlp.param_groups[3*i]['params'][0]
-                    v = mlp.param_groups[3*i+1]['params'][0]
-                    bias = mlp.param_groups[3*i+2]['params'][0]
-
-                   # Encoder Dense (Modified MLP)
-                    if s.grad is None:
-                        print(f'\n s -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        s_grad = s.grad.cpu().numpy()
-                        term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
-                    
-                    if v.grad is None:
-                        print(f'\n v -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        v_grad = v.grad.cpu().numpy()
-                        term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
-
-
-                    if bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-
-        return all_param_grads
-    
-    def loss_balancing_save_grads(self, mlp, term_grad_dict_key):
-
-        all_param_grads = np.array([])
-
-        for i,key in enumerate(term_grad_dict_key.keys()):
-            
-            if i <= self.config['neuralNet']['num_layers']:
-                # Standard Dense 
-                if mlp.standard_dense.net[2*i].weight.grad is None:
-                    print(f'\n Weights -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    weight_grad = mlp.standard_dense.net[2*i].weight.grad.cpu().numpy()
-                    term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
-
-
-                if mlp.standard_dense.net[2*i].bias.grad is None:
-                    print(f'\n Bias -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    bias_grad = mlp.standard_dense.net[2*i].bias.grad.cpu().numpy()
-                    term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-            else:
-
-                if key == 'encoder_dense1_layer0':
-                    # Encoder Dense (Modified MLP)
-                    if mlp.encoder_dense1.net[0].weight.grad is None:
-                        print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        weight_grad = mlp.encoder_dense1.net[0].weight.grad.cpu().numpy()
-                        term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
-
-
-                    if mlp.encoder_dense1.net[0].bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = mlp.encoder_dense1.net[0].bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-               
-                else: # 'encoder_dense2_layer0'
-                   # Encoder Dense (Modified MLP)
-                    if mlp.encoder_dense2.net[0].weight.grad is None:
-                        print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        weight_grad = mlp.encoder_dense2.net[0].weight.grad.cpu().numpy()
-                        term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
-
-
-                    if mlp.encoder_dense2.net[0].bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = mlp.encoder_dense2.net[0].bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-
-        return all_param_grads
-    
-    def logger_call(self):
-        
-        # Total and term losses
-        loss_train = self.total_loss
-        l2_error_vel = self.l2_error_vel
-        l2_error_pressure = self.l2_error_pressure
-        
-        # Access to the learning rate
-        lr = self.optimizer_Adam.param_groups[0]['lr']
-        
-        # LOG
-        runtime1 = time.time()
-        runtime_iter = (runtime1 - self.runtime0)/60
-        self.runtime0 = runtime1 
-        
-
-        self.log_log = self.log_log + \
-"\n---------------------------\n" + \
-f"""Iter: {(self.regular_iter)}/{(self.last_iter)} - Time: {round(runtime_iter,4)}min""" + \
-"\n---------------------------\n" + \
-f"""- total_loss_train: {loss_train} \n- l2_relative_error - velocity: {l2_error_vel} \n- l2_relative_error - pressure: {l2_error_pressure} \n\n- lr: {lr}\n\n""" 
-
-        for key in self.config['loss_terms']:
-            self.log_log = self.log_log + \
-f"""- {key}_loss: {self.term_loss_tensor_dict[key].item()}\n"""
-
-
-        # Loss balancing log
-        self.log_log = self.log_log +"\n"
-        
-        for key in self.config['loss_terms']:
-            self.log_log = self.log_log + \
-f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
-     
-        # Monitoring resources 
-        if self.config['logging']['monitoring_resources']:
-            gpu_load, gpu_memory = get_gpu_usage()
-            if gpu_load is not None:
-                self.log_log = self.log_log + \
-"\n---------\n" + \
-f"""- CPU usage: {get_cpu_usage()}% \n""" + \
-f"""- Memory usage: {get_memory_usage()}MB \n""" + \
-f"""- GPU usage: {gpu_load}% \n""" + \
-f"""- GPU memory usage: {gpu_memory}MB \n"""
-            else:
-                self.log_log = self.log_log + \
-"\n---------\n" + \
-f"""- CPU usage: {get_cpu_usage()}% \n""" + \
-f"""- Memory usage: {get_memory_usage()}MB \n""" + \
-f"""- No GPU detected \n"""
-                
-        # Save into a .txt file
-        with open(self.config['train_progress_file_path'], 'w') as file:
-            file.write(self.log_log)
-        
-        # Tensorboard
-        self.writer.add_scalar('total_loss', self.total_loss, self.regular_iter)
-        self.writer.add_scalar('l2_error_vel', self.l2_error_vel, self.regular_iter)
-        self.writer.add_scalar('l2_error_pressure', self.l2_error_pressure, self.regular_iter)
-        self.writer.add_scalar('lr', lr, self.regular_iter)
-        for key in self.config['loss_terms']: 
-            self.writer.add_scalar(f'{key}_loss', self.term_loss_tensor_dict[key].item(), self.regular_iter)
-            self.writer.add_scalar(f'{key}_lambdas', self.term_lambdas_tensor_dict[key].item(), self.regular_iter)
-    
-    def checkpoint_call(self, tracking_param):
-        
-        # Checkpoints
-        if tracking_param < self.min_error_for_checkpoint:
-        
-            directory = self.config['checkpoints_folder_path']
-
-            # Construct the full path for files
-            filename_model_weights = f"model_weights.pt"
-            path_model_weights = directory.joinpath(filename_model_weights)
-           
-            ## Save model weights based on the tracking_param
-            model_weights = {}
-            for i in range(len(self.model.branch_list)):
-                end_string = '_state_dict'
-                key = self.config['branches_control']['branch_list_ID'][i] + end_string
-                aux_dict = {key: self.model.branch_list[i].state_dict()}
-                model_weights.update(aux_dict)
-            
-            model_weights.update({'trunk_state_dict': self.model.trunk.state_dict()})
-
-            torch.save(model_weights, path_model_weights)
-
-            # Update for next iteration
-            self.min_error_for_checkpoint = tracking_param 
-            self.best_iter = self.regular_iter 
-            self.config['logger'].info(f'New best iteration {self.best_iter} registered.')
-
-    def collocation_points_generator(self, batch_size_coll, coordinates, time_min, time_max):
-       
-        N_coord = coordinates.shape[0]
-
-        if N_coord < batch_size_coll:
-            xyz_idx = np.random.choice(N_coord, N_coord, replace=False)  # Select all elements if N_coord < batch_size_coll
-        else:
-            xyz_idx = np.random.choice(N_coord, batch_size_coll, replace=False)
-        xyz = coordinates[xyz_idx]
-
-        #We will consider time values in the interval min(time_vector) and max(time_vector)
-        t = np.sort(np.random.uniform(time_min, time_max, batch_size_coll))
-
-        return xyz[:,0][:,None], xyz[:,1][:,None], xyz[:,2][:,None], t[:,None]
-
-    def random_sampling(self, xyzt, vel, pressure, label = 'val'):
-        """Return a random uniform sample of coordinate points from label with their respective velocities and pressure.
-        """
-        N_coord = xyzt.shape[0]
-        idx = np.random.choice(N_coord,  round(self.config['train'][f'batch_dfraction'][label]*N_coord), replace=False)
-        
-        idx = np.sort(idx)
-        xyzt_sample = xyzt[idx]
-        vel_sample = vel[idx]
-        pressure_sample= pressure[idx] 
-
-        return xyzt_sample, vel_sample, pressure_sample
-    
-    def train(self, timePrm, full_ds, dataPrm, val_ds):
-        
-        print("### TRAINING ... ###")
-
-        self.last_iter = self.config['train']['adam_steps'] + self.config['train']['lbfgs_steps'] - 1
-        self.regular_iter = 0
-
-        time_vector = timePrm.time_vector[:,None]
-
-        N_vel_branch_inlet = len(self.config['branches_control']['vel_axis_ID'])
-        has_outlet_pressure = len(self.config['branches_control']['branch_input_ID']) > len(self.config['branches_control']['vel_axis_ID'])
-
-        xyzt_bc_inlet = {} 
-        vel_bc_inlet = {} 
-        # pressure_bc_inlet = {} 
-
-        xyzt_bc_outlet = {} 
-        vel_bc_outlet = {} 
-        pressure_bc_outlet = {} 
-
-        xyzt_bc_wall = {} 
-        vel_bc_wall = {} 
-        # pressure_bc_wall = {} 
-
-        xyzt_ic = {} 
-        vel_ic = {} 
-        # pressure_ic = {}
-
-        xyzt_data = {} 
-        vel_data = {} 
-        pressure_data = {}
-
-        xyzt_val = {} 
-        vel_val = {}
-        pressure_val = {}
-
-        Re_list = []
-
-        for chosen_flow_label in self.config['train']['chosen_flow_labels']:
-
-            # stratified_val_ds[chosen_flow_label] = craft_validation_dataset_deeponet(val_ds[chosen_flow_label], time_vector)
-
-            #---------------------
-            # Fixed dataset
-            #---------------------
-            ## BOUNDARY CONDITIONS AND INITIAL CONDITION
-            xyzt_bc_inlet[chosen_flow_label], vel_bc_inlet[chosen_flow_label], _, xyzt_bc_outlet[chosen_flow_label], vel_bc_outlet[chosen_flow_label], pressure_bc_outlet[chosen_flow_label], xyzt_bc_wall[chosen_flow_label], vel_bc_wall[chosen_flow_label], _, xyzt_ic[chosen_flow_label], vel_ic[chosen_flow_label], _ = craft_bc_and_ic_dataset(full_ds[chosen_flow_label], time_vector)
-            # xyzt_bc_inlet[chosen_flow_label], vel_bc_inlet[chosen_flow_label], pressure_bc_inlet[chosen_flow_label], xyzt_bc_outlet[chosen_flow_label], vel_bc_outlet[chosen_flow_label], pressure_bc_outlet[chosen_flow_label], xyzt_bc_wall[chosen_flow_label], vel_bc_wall[chosen_flow_label], pressure_bc_wall[chosen_flow_label], xyzt_ic[chosen_flow_label], vel_ic[chosen_flow_label], pressure_ic[chosen_flow_label] = craft_bc_and_ic_dataset(full_ds[chosen_flow_label], time_vector)
-
-            ## DATA 
-            xyzt_data[chosen_flow_label], vel_data[chosen_flow_label], pressure_data[chosen_flow_label] = build_stratum_dataset(dataPrm[chosen_flow_label], time_vector)
-
-            ## VALIDATION DATASET
-            xyzt_val[chosen_flow_label], vel_val[chosen_flow_label], pressure_val[chosen_flow_label] = craft_validation_dataset(val_ds[chosen_flow_label], time_vector)
-
-            Re_list.append(self.Re_dict[chosen_flow_label])
-
-        # """The coordinate points are the same between the different datasets, so we can choose a geometry among the options"""
-        coordinates, time_min, time_max = get_coordinates_for_generator(full_ds[self.config['train']['chosen_flow_labels'][0]], time_vector)
-
-        # Reynolds number
-        Re_array = np.tile(np.array(Re_list), self.config['train']['batch_size_coll'])
-        self.Re_tensor = torch.tensor(Re_array[:,None], dtype = torch.float32, requires_grad= False).to(self.config['device'])
-
-        # Workflow
-        self.custom_bar = trange(self.last_iter + 1)
-        
-        for regular_iter in self.custom_bar:
-
-            self.regular_iter = regular_iter
-
-            # Branch
-            branch_input = {}
-            for key in self.config['branches_control']['branch_input_ID']:
-                branch_input.update({key:[]})
-
-            # Trunk
-            vel_bc_inlet_target = []
-            vel_bc_outlet_target = []
-            vel_bc_wall_target = []
-            vel_ic_target = []
-
-            vel_data_target = []
-            pressure_data_target = []
-            
-            # Val
-            vel_val_target = []
-            pressure_val_target = []
-
-            for chosen_flow_label in self.config['train']['chosen_flow_labels']:
-                
-                ## Random Sampling
-                # INLET 
-                xyzt_bc_inlet_sample, vel_bc_inlet_sample, _ = self.random_sampling(xyzt_bc_inlet[chosen_flow_label], vel_bc_inlet[chosen_flow_label], NullContainer(), label = 'bc-inlet')
-                # xyzt_bc_inlet_sample, vel_bc_inlet_sample, _ = self.random_sampling(xyzt_bc_inlet[chosen_flow_label], vel_bc_inlet[chosen_flow_label], pressure_bc_inlet[chosen_flow_label], label = 'bc-inlet')
-                # OUTLET
-                xyzt_bc_outlet_sample, vel_bc_outlet_sample, pressure_bc_outlet_sample = self.random_sampling(xyzt_bc_outlet[chosen_flow_label], vel_bc_outlet[chosen_flow_label], pressure_bc_outlet[chosen_flow_label], label = 'bc-outlet')
-                # WALL 
-                xyzt_bc_wall_sample, vel_bc_wall_sample, _ = self.random_sampling(xyzt_bc_wall[chosen_flow_label], vel_bc_wall[chosen_flow_label], NullContainer(), label = 'bc-wall')
-                # xyzt_bc_wall_sample, vel_bc_wall_sample, _ = self.random_sampling(xyzt_bc_wall[chosen_flow_label], vel_bc_wall[chosen_flow_label], pressure_bc_wall[chosen_flow_label], label = 'bc-wall')
-                
-                # IC 
-                xyzt_ic_sample, vel_ic_sample, _ = self.random_sampling(xyzt_ic[chosen_flow_label], vel_ic[chosen_flow_label], NullContainer(), label = 'ic')
-                # xyzt_ic_sample, vel_ic_sample, _ = self.random_sampling(xyzt_ic[chosen_flow_label], vel_ic[chosen_flow_label], pressure_ic[chosen_flow_label], label = 'ic')
-                
-                # Data 
-                xyzt_data_sample, vel_data_sample, pressure_data_sample = self.random_sampling(xyzt_data[chosen_flow_label], vel_data[chosen_flow_label], pressure_data[chosen_flow_label], label = 'data')
-
-                # VAL 
-                xyzt_val_sample, vel_val_sample, pressure_val_sample = self.random_sampling(xyzt_val[chosen_flow_label], vel_val[chosen_flow_label], pressure_val[chosen_flow_label], label = 'val')
-
-
-                # Inlet
-                # inlet_vel = vel_bc_inlet_sample
-                # Outlet
-                # outlet_vel = vel_bc_outlet_sample
-                # outlet_pressure = pressure_bc_outlet_sample
-                # Wall
-                # wall_vel = vel_bc_wall_sample
-                # IC
-                # ic_vel = vel_ic_sample
-                # Data
-                # data_vel = vel_data_sample
-                # data_pressure = pressure_data_sample
-                # Val
-                # val_vel = vel_val_sample 
-                # val_pressure = pressure_val_sample
-                
-                ## Branch
-                for i in range(N_vel_branch_inlet):
-                    index = self.config['branches_control']['axis_indexes'][self.config['branches_control']['vel_axis_ID'][i]]
-                    branch_input[self.config['branches_control']['branch_input_ID'][i]].append(vel_bc_inlet_sample[:,index].T)
-                
-                if has_outlet_pressure:
-                    branch_input[self.config['branches_control']['branch_input_ID'][-1]].append(pressure_bc_outlet_sample[:,0].T)
-                
-                ## Trunk
-                vel_bc_inlet_target.append(vel_bc_inlet_sample)
-                vel_bc_outlet_target.append(vel_bc_outlet_sample)
-                vel_bc_wall_target.append(vel_bc_wall_sample)
-                vel_ic_target.append(vel_ic_sample)
-
-                vel_data_target.append(vel_data_sample)
-                pressure_data_target.append(pressure_data_sample)
-
-                vel_val_target.append(vel_val_sample )
-                pressure_val_target.append(pressure_val_sample)
-
-                # # Coordinates
-                # """The coordinate points are the same between the different datasets, so we can choose a geometry among the options"""
-                # xyzt_bc_inlet_fixed = xyzt_bc_inlet_sample
-                # xyzt_bc_outlet_fixed = xyzt_bc_outlet_sample
-                # xyzt_bc_wall_fixed = xyzt_bc_wall_sample
-                # xyzt_ic_fixed = xyzt_ic_sample
-                # xyzt_data_fixed = xyzt_data_sample
-                # xyzt_val_fixed = xyzt_val_sample
-            
-
-            # Trunk
-            vel_bc_inlet_target = np.array(vel_bc_inlet_target)
-            vel_bc_outlet_target = np.array(vel_bc_outlet_target)
-            vel_bc_wall_target = np.array(vel_bc_wall_target)
-            vel_ic_target = np.array(vel_ic_target)
-
-            vel_data_target = np.array(vel_data_target)
-            pressure_data_target = np.array(pressure_data_target)
-
-            vel_val_target = np.array(vel_val_target)
-            pressure_val_target = np.array(pressure_val_target)
-            
-            # INLET 
-            # xyzt_bc_inlet = inletPrm.coordinates
-            # N = 4, P = 518 (self.config['train']['fixed_bc_size']['inlet'])
-            xyzt_bc_inlet_array = np.repeat(xyzt_bc_inlet_sample, self.config['train']['n_input_functions'], axis=0)
-            self.xyzt_bc_inlet_tensor = torch.tensor(xyzt_bc_inlet_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            self.f_bc_inlet_tensor = []
-            for key in branch_input.keys():
-                f_bc_inlet_array = np.tile(np.array(branch_input[key]), (xyzt_bc_inlet_sample.shape[0],1))
-                self.f_bc_inlet_tensor.append(torch.tensor(f_bc_inlet_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-            
-            self.vel_bc_inlet_tensor = torch.tensor(np.swapaxes(vel_bc_inlet_target,0,1).reshape(-1,3), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            # WALL 
-            # xyz_bc_wall = wallPrm.coordinates
-            # N = 4, P = 19810 (self.config['train']['fixed_bc_size']['wall'])
-            xyzt_bc_wall_array = np.repeat(xyzt_bc_wall_sample, self.config['train']['n_input_functions'], axis=0)
-            self.xyzt_bc_wall_tensor = torch.tensor(xyzt_bc_wall_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-        
-            self.f_bc_wall_tensor = []
-            for key in branch_input.keys():
-                f_bc_wall_array = np.tile(np.array(branch_input[key]), (xyzt_bc_wall_sample.shape[0],1))
-                self.f_bc_wall_tensor.append(torch.tensor(f_bc_wall_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-            
-            self.vel_bc_wall_tensor = torch.tensor(np.swapaxes(vel_bc_wall_target,0,1).reshape(-1,3), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-        
-        
-            # OUTLET
-            # xyz_bc_outlet = outletPrm.coordinates
-            # N = 4, P = 720 (self.config['train']['fixed_bc_size']['outlet'])
-            xyzt_bc_outlet_array = np.repeat(xyzt_bc_outlet_sample, self.config['train']['n_input_functions'], axis=0)
-            self.xyzt_bc_outlet_tensor = torch.tensor(xyzt_bc_outlet_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            self.f_bc_outlet_tensor = []
-            for key in branch_input.keys():
-                f_bc_outlet_array = np.tile(np.array(branch_input[key]), (xyzt_bc_outlet_sample.shape[0],1))
-                self.f_bc_outlet_tensor.append(torch.tensor(f_bc_outlet_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-            
-            self.vel_bc_outlet_tensor = torch.tensor(np.swapaxes(vel_bc_outlet_target,0,1).reshape(-1,3), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            # IC
-            # N = 4, P = 1800 
-            xyzt_ic_array = np.repeat(xyzt_ic_sample, self.config['train']['n_input_functions'], axis=0)
-            self.xyzt_ic_tensor = torch.tensor(xyzt_ic_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            self.f_ic_tensor = []
-            for key in branch_input.keys():
-                f_ic_array = np.tile(np.array(branch_input[key]), (xyzt_ic_sample.shape[0],1))
-                self.f_ic_tensor.append(torch.tensor(f_ic_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-            
-            self.vel_ic_tensor = torch.tensor(np.swapaxes(vel_ic_target,0,1).reshape(-1,3), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            # DATA
-            # N = 4, P = 1800 
-            xyzt_data_array = np.repeat(xyzt_data_sample, self.config['train']['n_input_functions'], axis=0)
-            self.xyzt_data_tensor = torch.tensor(xyzt_data_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            self.f_data_tensor = []
-            for key in branch_input.keys():
-                f_data_array = np.tile(np.array(branch_input[key]), (xyzt_data_sample.shape[0],1))
-                self.f_data_tensor.append(torch.tensor(f_data_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-            
-            self.vel_data_tensor = torch.tensor(np.swapaxes(vel_data_target,0,1).reshape(-1,3), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            self.pressure_data_tensor = torch.tensor(np.swapaxes(pressure_data_target,0,1).reshape(-1,1), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            
-            # Validation dataset
-            # N = 5, P = xyzt_val_fixed.shape[0]
-            xyzt_val_array = np.repeat(xyzt_val_sample, self.config['train']['n_input_functions'], axis=0)
-            self.xyzt_val_tensor = torch.tensor(xyzt_val_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            self.f_val_tensor = []
-            for key in branch_input.keys():
-                f_val_array = np.tile(np.array(branch_input[key]), (xyzt_val_sample.shape[0],1))
-                self.f_val_tensor.append(torch.tensor(f_val_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-            
-            self.vel_val_tensor = torch.tensor(np.swapaxes(vel_val_target,0,1).reshape(-1,3), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            self.pressure_val_tensor = torch.tensor(np.swapaxes(pressure_val_target,0,1).reshape(-1,1), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-
-            ## COLLOCATION POINTS
-            # Random sample
-            x_phy, y_phy, z_phy, t_phy = self.collocation_points_generator(self.config['train']['batch_size_coll'], coordinates, time_min, time_max)
-
-            # N = 4, P = batch_size_coll
-            x_phy_array = np.repeat(x_phy, self.config['train']['n_input_functions'], axis=0)
-            y_phy_array = np.repeat(y_phy, self.config['train']['n_input_functions'], axis=0)
-            z_phy_array = np.repeat(z_phy, self.config['train']['n_input_functions'], axis=0)
-            t_phy_array = np.repeat(t_phy, self.config['train']['n_input_functions'], axis=0)
-
-            self.x_phy = torch.tensor(x_phy_array, dtype = torch.float32, requires_grad= True).to(self.config['device'])
-            self.y_phy = torch.tensor(y_phy_array, dtype = torch.float32, requires_grad= True).to(self.config['device'])
-            self.z_phy = torch.tensor(z_phy_array, dtype = torch.float32, requires_grad= True).to(self.config['device'])
-            self.t_phy = torch.tensor(z_phy_array, dtype = torch.float32, requires_grad= True).to(self.config['device'])
-
-            
-            self.f_phy_tensor = []
-            for key in branch_input.keys():
-                f_phy_array = np.tile(np.array(branch_input[key]), (self.config['train']['batch_size_coll'],1))
-                self.f_phy_tensor.append(torch.tensor(f_phy_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-            
-            self.residual_target = torch.zeros((self.x_phy.shape[0],1), dtype = torch.float32, requires_grad= False).to(self.config['device'])
-
-        
-            # Compute total loss, apply backward pass and optimize
-            loss_total = self.compute_loss_total_and_backward()
-            self.optimizer_Adam.step()
-
-            # Store batch losses
-            self.total_loss = loss_total.item()
-
-
-            # Compute l2 relative error with Validation dataset
-            ## REFERENCE
-            vel_ref = torch.sqrt(torch.sum(self.vel_val_tensor**2, axis=1))
-            p_ref =  self.pressure_val_tensor
-
-            ## PREDICTED
-            with torch.no_grad():
-                tau = []
-                for i, f_star_tensor_i in enumerate(self.f_val_tensor):
-                    tau.append(self.model.branch_list[i](f_star_tensor_i))
-                
-                beta = self.model.trunk(self.xyzt_val_tensor)
-
-            if len(self.config['branches_control']['branch_list_ID']) == 1:
-                v1 = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-                v2 = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-                v3 = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-                p_pred = torch.sum(tau[0][:,300:400] * beta[:,300:400], axis = 1)[:, None]
-            else:    
-                v1 = torch.sum(reduce(lambda x, y: x[:,0:100] * y[:,0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-                v2 = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-                v3 = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-                p_pred = torch.sum(reduce(lambda x, y: x[:,300:400] * y[:,300:400], tau) * beta[:,300:400], axis = 1)[:, None]
-               
-            vel = torch.cat((v1,v2,v3), axis = 1)
-            vel_pred = torch.sqrt(torch.sum(vel**2, axis=1))
-
-            
-            l2_relative_error_vel = metric_l2_relative_error(exact = vel_ref, pred = vel_pred)
-            l2_relative_error_pressure = metric_l2_relative_error(exact = p_ref, pred = p_pred)
-           
-            # Store errors
-            self.l2_error_vel = l2_relative_error_vel.item()
-            self.l2_error_pressure = l2_relative_error_pressure.item()
-
-            # -------------
-            if self.regular_iter % self.config['logging']['log_every_steps'] == 0 or self.regular_iter == self.last_iter:
-                self.logger_call()
-
-            self.checkpoint_call(self.total_loss)
-
-            # Conditions to stop the loop
-            if self.regular_iter == self.config['train']['stop_iter']:
-                self.logger_call()
-                break
-            
-            if self.has_exponential_decay:
-                self.scheduler_Adam.step()
-            # -------------
-
-        self.config['logger'].info("###-----------------------------------------###")
-        self.config['logger'].info("### The best model is obtained in iteration = " + f"{self.best_iter}" + " with a total_loss = " + f"{self.min_error_for_checkpoint}.")
-
-   
             
 class Tester(nn.Module):
     
@@ -2325,7 +2006,6 @@ class Tester(nn.Module):
         u_pred = u_pred_tensor.cpu().numpy()
 
         return x_array, u_exact, u_pred
-    
     
     def visualize_comparison(self, t_all, f_a_i, x_final, u_exact_final, u_pred_final):
        
