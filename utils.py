@@ -41,32 +41,46 @@ from torch.utils.data import Dataset, DataLoader
 
 # General purpose
 
-def get_cpu_memory_usage(description=""):
-    
-    # Get system memory information using psutil
-    mem_info = psutil.virtual_memory()
+def get_cpu_memory_usage(description: str = "") -> str:
+    mem = psutil.virtual_memory()
 
-    total_gib = mem_info.total / (1024**3)
-    available_gib = mem_info.available / (1024**3) # Memory immediately available
-    used_gib = mem_info.used / (1024**3)       # Total RAM used (total - available often includes cache/buffers)
-    percent_used = mem_info.percent             # Percentage of RAM used (total - available) / total * 100
+    total_gib = mem.total / 1024 ** 3
+    used_gib = mem.used / 1024 ** 3
+    avail_gib = mem.available / 1024 ** 3
+    percent_used = mem.percent
 
-    # Print the formatted memory information
-    print(f"CPU Memory ({description}): "
-          f"Total: {total_gib:.2f} GiB | "
-          f"Available: {available_gib:.2f} GiB | "
-          f"Used: {used_gib:.2f} GiB | "
-          f"Usage: {percent_used:.1f}%")
-    
-def get_cuda_memory_usage(device, description=""):
-    if device.type == 'cuda':
-        allocated = torch.cuda.memory_allocated(device) / (1024**3)
-        reserved = torch.cuda.memory_reserved(device) / (1024**3)
-        total_capacity = torch.cuda.get_device_properties(device).total_memory / (1024**3)
-        print(f"CUDA Memory ({description}) on {device}: "
-              f"Allocated: {allocated:.2f} GiB | Reserved: {reserved:.2f} GiB | Total: {total_capacity:.2f} GiB")
-    else:
-        print(f"Device is {device}, not CUDA.")
+    msg = (
+        f"CPU-RAM{f' ({description})' if description else ''}: "
+        f"Used {used_gib:.2f} GiB / Total {total_gib:.2f} GiB | "
+        f"Usage {percent_used:.1f}% | "
+        f"Avail {avail_gib:.2f} GiB"
+    )
+    # print(msg)
+    return msg
+
+def get_cuda_memory_usage(device: torch.device, description: str = "") -> str:
+    if device.type != "cuda":
+        msg = f"Device {device} is not CUDA."
+        print(msg)
+        return msg
+
+    allocated_gib = torch.cuda.memory_allocated(device) / 1024 ** 3
+    reserved_gib = torch.cuda.memory_reserved(device) / 1024 ** 3
+    total_gib = torch.cuda.get_device_properties(device).total_memory / 1024 ** 3
+
+    # “Available” = total physical capacity minus memory reserved by the CUDA caching allocator
+    avail_gib = total_gib - reserved_gib
+    percent_used = (allocated_gib / total_gib) * 100 if total_gib else 0.0
+
+    msg = (
+        f"CUDA{f' ({description})' if description else ''} on {device}: "
+        f"Used {allocated_gib:.2f} GiB / Total {total_gib:.2f} GiB | "
+        f"Usage {percent_used:.1f}% | "
+        f"Avail {avail_gib:.2f} GiB | "
+        f"Reserv {reserved_gib:.2f} GiB"
+    )
+    # print(msg)
+    return msg
 
 def run_command(command):
     """Execute shell commands and capture output.

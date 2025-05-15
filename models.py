@@ -382,7 +382,176 @@ class ModifiedMultiLayerPerceptron_DeepONet (nn.Module):
 
         return H1
 
+class ModifiedDeepONetArch (nn.Module):
 
+    def __init__(self, config):
+
+        super().__init__()
+
+        # Periodic BC
+        self.has_periodic_bc = config['periodic_bc']['enabled']
+        # Hard BC
+        # self.has_hard_bc = config['hard_bc']['enabled']
+
+        # ----------
+        # utils
+        device = config['device']
+        in_dim_branch = config['branch']['neuralNet']['in_dim']
+        in_dim_trunk_mat1 = config['trunk_mat1']['neuralNet']['in_dim']
+        in_dim_trunk_mat2 = config['trunk_mat2']['neuralNet']['in_dim']
+
+        self.num_layers_branch = config['branch']['neuralNet']['num_layers']
+        self.num_layers_trunk_mat1 = config['trunk_mat1']['neuralNet']['num_layers']
+        self.num_layers_trunk_mat2 = config['trunk_mat2']['neuralNet']['num_layers']
+        
+        # ----------
+        # #----------------------------------
+        # # Fourier embedding 
+        # #----------------------------------
+        # self.fourier_emb = config['fourier_emb']
+        
+        # if self.fourier_emb:
+        #     in_dim_branch1 = 2 * self.fourier_emb['embed_dim']
+        #     self.call_fourier_embedding_branch1 = FourierEmbedding(self.fourier_emb, config['branch1']['neuralNet']['in_dim'], device)
+            
+        #     in_dim_branch2 = 2 * self.fourier_emb['embed_dim']
+        #     self.call_fourier_embedding_branch2 = FourierEmbedding(self.fourier_emb, config['branch2']['neuralNet']['in_dim'], device)
+            
+        #     in_dim_trunk = 2 * self.fourier_emb['embed_dim']
+        #     self.call_fourier_embedding_trunk = FourierEmbedding(self.fourier_emb, config['trunk']['neuralNet']['in_dim'], device)
+
+
+        #----------------------------------
+        # Architectures initialization
+        #----------------------------------
+        self.encoder_dense1_branch = EncoderDense(config, in_dim_branch, 'branch') 
+        self.encoder_dense1_trunk_mat1 = EncoderDense(config, in_dim_trunk_mat1, 'trunk_mat1') 
+        self.encoder_dense1_trunk_mat2 = EncoderDense(config, in_dim_trunk_mat2, 'trunk_mat2') 
+        
+        self.encoder_dense2_branch = EncoderDense(config, in_dim_branch, 'branch') 
+        self.encoder_dense2_trunk_mat1 = EncoderDense(config, in_dim_trunk_mat1, 'trunk_mat1') 
+        self.encoder_dense2_trunk_mat2 = EncoderDense(config, in_dim_trunk_mat2, 'trunk_mat2') 
+
+        self.standard_dense_branch = StandardDense(config, in_dim_branch, 'branch')
+        self.standard_dense_trunk_mat1 = StandardDense(config, in_dim_trunk_mat1, 'trunk_mat1')
+        self.standard_dense_trunk_mat2 = StandardDense(config, in_dim_trunk_mat2, 'trunk_mat2')
+
+        #----------------------------------
+        # Manually define parameters
+        #----------------------------------
+    
+        self.param_groups = []
+        for i in range(self.num_layers_branch+1):
+           
+            self.param_groups.append({'params': [self.standard_dense_branch.net[2*i].weight]})
+            self.param_groups.append({'params': [self.standard_dense_branch.net[2*i].bias]})
+            
+        for i in range(self.num_layers_trunk_mat1+1):
+           
+            self.param_groups.append({'params': [self.standard_dense_trunk_mat1.net[2*i].weight]})
+            self.param_groups.append({'params': [self.standard_dense_trunk_mat1.net[2*i].bias]})
+            
+        for i in range(self.num_layers_trunk_mat2+1):
+           
+            self.param_groups.append({'params': [self.standard_dense_trunk_mat2.net[2*i].weight]})
+            self.param_groups.append({'params': [self.standard_dense_trunk_mat2.net[2*i].bias]})
+    
+        
+        self.param_groups.append({'params': [self.encoder_dense1_branch.net[0].weight]})
+        self.param_groups.append({'params': [self.encoder_dense1_branch.net[0].bias]})
+    
+        self.param_groups.append({'params': [self.encoder_dense1_trunk_mat1.net[0].weight]})
+        self.param_groups.append({'params': [self.encoder_dense1_trunk_mat1.net[0].bias]})
+    
+        self.param_groups.append({'params': [self.encoder_dense1_trunk_mat2.net[0].weight]})
+        self.param_groups.append({'params': [self.encoder_dense1_trunk_mat2.net[0].bias]})
+        
+        self.param_groups.append({'params': [self.encoder_dense2_branch.net[0].weight]})
+        self.param_groups.append({'params': [self.encoder_dense2_branch.net[0].bias]})
+    
+        self.param_groups.append({'params': [self.encoder_dense2_trunk_mat1.net[0].weight]})
+        self.param_groups.append({'params': [self.encoder_dense2_trunk_mat1.net[0].bias]})
+    
+        self.param_groups.append({'params': [self.encoder_dense2_trunk_mat2.net[0].weight]})
+        self.param_groups.append({'params': [self.encoder_dense2_trunk_mat2.net[0].bias]})
+
+
+       
+    def forward(self, u,y, mat):
+
+        # # Create a copy of y
+        # copy_y = y.clone()
+
+        if mat == 'mat1':
+            
+            if torch.is_tensor(u) != True:
+                raise TypeError('Check u typo in forward pass')
+            
+            
+            if torch.is_tensor(y) != True:
+                raise TypeError('Check y typo in forward pass')
+                # x = torch.from_numpy(y)
+
+
+            # Forward
+            U = self.encoder_dense1_branch(u)
+            V = self.encoder_dense1_trunk_mat1(y)
+            
+            H1u = self.standard_dense_branch.net[1](self.standard_dense_branch.net[0](u))
+            H1y = self.standard_dense_trunk_mat1.net[1](self.standard_dense_trunk_mat1.net[0](y))
+
+            for i in range(1, self.num_layers_branch): # The three architectures have to be the same
+                Hu = self.standard_dense_branch.net[2*i+1](self.standard_dense_branch.net[2*i](H1u))
+                Hy = self.standard_dense_trunk_mat1.net[2*i+1](self.standard_dense_trunk_mat1.net[2*i](H1y))
+                
+                H1u = (1 - Hu) * U + Hu * V
+                H1y = (1 - Hy) * U + Hy * V
+
+            tau = self.standard_dense_branch.net[-1](H1u)
+            beta = self.standard_dense_trunk_mat1.net[-1](H1y)
+            
+
+            Chi_pred = torch.sum(tau * beta, axis = 1)[:, None]
+
+            # if self.has_hard_bc:
+            #     return copy_y*Chi_pred
+            
+
+        elif mat == 'mat2':
+
+            if torch.is_tensor(u) != True:
+                raise TypeError('Check u typo in forward pass')
+            
+            
+            if torch.is_tensor(y) != True:
+                raise TypeError('Check y typo in forward pass')
+                # x = torch.from_numpy(y)
+
+
+            # Forward
+            U = self.encoder_dense2_branch(u)
+            V = self.encoder_dense2_trunk_mat2(y)
+            
+            H1u = self.standard_dense_branch.net[1](self.standard_dense_branch.net[0](u))
+            H1y = self.standard_dense_trunk_mat2.net[1](self.standard_dense_trunk_mat2.net[0](y))
+
+            for i in range(1, self.num_layers_branch): # The three architectures have to be the same
+                Hu = self.standard_dense_branch.net[2*i+1](self.standard_dense_branch.net[2*i](H1u))
+                Hy = self.standard_dense_trunk_mat2.net[2*i+1](self.standard_dense_trunk_mat2.net[2*i](H1y))
+                
+                H1u = (1 - Hu) * U + Hu * V
+                H1y = (1 - Hy) * U + Hy * V
+
+            tau = self.standard_dense_branch.net[-1](H1u)
+            beta = self.standard_dense_trunk_mat2.net[-1](H1y)
+            
+
+            Chi_pred = torch.sum(tau * beta, axis = 1)[:, None]
+
+            # if self.has_hard_bc:
+            #     return (1-copy_y)*Chi_pred
+
+        return Chi_pred
 
 
 #--------------------------
@@ -431,9 +600,9 @@ class Trainer_PIDeepONetLdata(nn.Module):
         super().__init__()
         
         self.config = config
-        self.has_random_weight_fact = self.config['random_weight_fact']['enabled']
-        self.has_loss_balancing = self.config['loss_balancing']['enabled']
         self.has_exponential_decay = self.config['optim1']['exponential_decay']['enabled']
+        self.has_loss_balancing = self.config['loss_balancing']['enabled']
+        # self.has_random_weight_fact = self.config['random_weight_fact']['enabled']
 
         # Initialize the SummaryWriter
         if self.config['mode']=='train':
@@ -499,12 +668,38 @@ class Trainer_PIDeepONetLdata(nn.Module):
         # Loss terms
         self.term_loss_tensor_dict = {key:[] for key in self.config['loss_terms']}
 
+        # Predicted output terms
+        self.term_s_tensor_dict = {key:[] for key in self.config['loss_terms']}
+
         # lambdas initialization
         self.term_lambdas_tensor = torch.tensor(
                                     [self.config['lambda_weights_init'][i] for i in range(len(self.config['loss_terms']))], 
                                     dtype=torch.float32, requires_grad=False).to(self.config['device'])
 
         self.term_lambdas_tensor_dict = {key: self.term_lambdas_tensor[i] for i,key in enumerate(self.config['loss_terms'])}
+
+         # Branch and Trunks
+        self.K = {key:[] for key in self.config['loss_terms']}
+        if self.has_loss_balancing and self.config['loss_balancing']['scheme'] == 'ntk_guided_weights':
+            self.config['logger'].info(f"Using NTK guided weights")              
+            self.loss_balancing_log = """Loss Balancing - NTK guided weights\n"""
+        
+            self.term_grad_dict = {}
+            for net in ['branch1', 'trunk']:
+                self.term_grad_dict[net] = {}
+                for key in self.config['loss_terms']:
+                    self.term_grad_dict[net][key] = {}
+                    for n in range(config[net]['neuralNet']['num_layers'] + 1):
+                        self.term_grad_dict[net][key][f'standard_dense_layer{2*n}'] = {'weight': [], 'bias': []}
+            
+            self.global_hat_lambdas = {key:[] for key in self.config['loss_terms']}
+
+            for net in ['branch1', 'trunk']:
+                if self.config[net]["neuralNet"]["architecture"] == "Modified MLP":
+                    for key in self.config['loss_terms']:
+                        self.term_grad_dict[net][key].update({f'encoder_dense1_layer{0}' : {'weight': [], 'bias': []}})
+                        self.term_grad_dict[net][key].update({f'encoder_dense2_layer{0}' : {'weight': [], 'bias': []}})
+
 
         self.log_log = """LOG\n"""
         self.min_error_for_checkpoint = np.Infinity
@@ -533,7 +728,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
         u_loss = self.loss_fn(u_pred, u_GT)
 
     
-        return u_loss
+        return u_loss, u_pred
     
     def loss_initial_condition(self):
 
@@ -557,7 +752,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
         u_loss = self.loss_fn(u_pred, u_GT)
 
     
-        return u_loss
+        return u_loss, u_pred
     
     def loss_physics(self):
 
@@ -589,18 +784,23 @@ class Trainer_PIDeepONetLdata(nn.Module):
         # Compute losses
         loss = self.loss_fn(EQ1, self.residual_target)
        
-        return loss
+        return loss, u
         
     def loss(self):
 
         # Forward pass and compute the losses per terms
-        loss_ic = self.loss_initial_condition()
-        loss_data = self.loss_data()
-        loss_p = self.loss_physics()
+        loss_ic, pred_ic = self.loss_initial_condition()
+        loss_data, pred_data = self.loss_data()
+        loss_p, pred_phy = self.loss_physics()
 
         self.term_loss_tensor_dict['ic'] = loss_ic
         self.term_loss_tensor_dict['data'] = loss_data
         self.term_loss_tensor_dict['phy'] = loss_p
+
+        self.term_s_tensor_dict['ic'] = pred_ic
+        self.term_s_tensor_dict['data'] = pred_data
+        self.term_s_tensor_dict['phy'] = pred_phy
+        
         
         # Apply adaptive lambdas
         self.loss_balancing_call()
@@ -631,191 +831,149 @@ class Trainer_PIDeepONetLdata(nn.Module):
     
     def loss_balancing_method(self):
 
-        for key in self.config['loss_terms']:
-            self.term_loss_tensor_dict[key].backward(retain_graph=True)
+        if self.config['loss_balancing']['scheme'] == 'no_weights':
+            pass
 
-            if self.has_random_weight_fact:
-                all_param_grads = self.loss_balancing_save_grads_RWF(self.model.mlp, self.term_grad_dict[key])
-            else:
-                all_param_grads = self.loss_balancing_save_grads(self.model.mlp, self.term_grad_dict[key])
-            
-            
-            # Paper 1 'sum(norm) / norm': Wang et al. 2023 An Expert's Guide ...
-            self.global_hat_lambdas[key] = np.linalg.norm(all_param_grads) 
-
-            self.optimizer_Adam.zero_grad() #### NEEDED FOR THE OPTIMIZER
-
+        elif self.config['loss_balancing']['scheme'] == 'fixed_weights':
+            pass
         
-        # Paper 1 'sum(norm) / norm': Wang et al. 2023 An Expert's Guide ...
-        total_sum = sum(self.global_hat_lambdas.values())
-        new_lambs_hat = torch.tensor([total_sum / self.global_hat_lambdas[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
-        # new_lambs_hat = torch.tensor([total_sum/(self.global_hat_lambdas[key] + self.config['loss_balancing']['EPS']) for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
-        
-        # Compute new lambdas
-        new_lambs = self.config['loss_balancing']['momentum'] * self.term_lambdas_tensor + (1 - self.config['loss_balancing']['momentum']) * new_lambs_hat
-        
-        # Update lambdas
-        self.term_lambdas_tensor = new_lambs
-    
-    def loss_balancing_save_grads_RWF(self, mlp, term_grad_dict_key):
-
-        all_param_grads = np.array([])
-
-        for i,key in enumerate(term_grad_dict_key.keys()):
+        elif self.config['loss_balancing']['scheme'] == 'data_guided_weights':
             
-            if i <= self.config['neuralNet']['num_layers']:
-                s = mlp.param_groups[3*i]['params'][0]
-                v = mlp.param_groups[3*i+1]['params'][0]
-                bias = mlp.param_groups[3*i+2]['params'][0]
+            # Create a copy of the tensor values to avoid gradient issues
+            term_s_tensor_dict_copy = {
+                key: tensor.detach().clone() 
+                for key, tensor in self.term_s_tensor_dict.items()
+            }
 
-                # Standard Dense 
-                if s.grad is None:
-                    print(f'\n s -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    s_grad = s.grad.cpu().numpy()
-                    term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
+            for idx, key in enumerate(self.config['loss_terms']):
+                # Use detached tensor to compute max
+                max_val = torch.max(torch.abs(term_s_tensor_dict_copy[key]))
+                self.term_lambdas_tensor[idx] = 1/max_val.detach()
+
+        elif self.config['loss_balancing']['scheme'] == 'ntk_guided_weights':
+            
+            for key in self.config['loss_terms']:
+                self.term_loss_tensor_dict[key].backward(retain_graph=True)
+
+                all_param_grads_branch = self.loss_balancing_save_grads(self.model.branch_list[0], self.term_grad_dict['branch1'][key], 'branch1')
+                all_param_grads_trunk = self.loss_balancing_save_grads(self.model.trunk, self.term_grad_dict['trunk'][key], 'trunk')
                 
-                if v.grad is None:
-                    print(f'\n v -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    v_grad = v.grad.cpu().numpy()
-                    term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
+                all_param_grads = np.hstack([all_param_grads_branch, all_param_grads_trunk])
+                
+                # # Paper 1 NTK: Wang et al. 2022 Improved Architecture and ...
+                
+                self.K[key] =  np.dot(all_param_grads,all_param_grads)
 
 
-                if bias.grad is None:
-                    print(f'\n Bias -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    bias_grad = bias.grad.cpu().numpy()
-                    term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-            else:
+                self.optimizer_Adam.zero_grad() #### UPDATE HERE FOR THE OPTIMIZER
 
-                if key == 'encoder_dense1_layer0':
-                    s = mlp.param_groups[3*i]['params'][0]
-                    v = mlp.param_groups[3*i+1]['params'][0]
-                    bias = mlp.param_groups[3*i+2]['params'][0]
+            
+           # # Paper 1 NTK: Wang et al. 2022 Improved Architecture and ...
+           # Combine into one tensor
+            K = torch.tensor(list(self.K.values()))
 
-                    # Encoder Dense (Modified MLP)
-                    if s.grad is None:
-                        print(f'\n s -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        s_grad = s.grad.cpu().numpy()
-                        term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
-                    
-                    if v.grad is None:
-                        print(f'\n v -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        v_grad = v.grad.cpu().numpy()
-                        term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
+            if self.config['loss_balancing']['type'] == 'global_NTK_weights':
+                K_sum = K.sum()
+            
+                new_lambs = torch.tensor([K_sum / self.K[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
 
+            elif self.config['loss_balancing']['type'] == 'local_NTK_weights':
+                K_max = K.max()
+                
+                new_lambs = torch.tensor([K_max / self.K[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
 
-                    if bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-               
-                else: # 'encoder_dense2_layer0'
-                    s = mlp.param_groups[3*i]['params'][0]
-                    v = mlp.param_groups[3*i+1]['params'][0]
-                    bias = mlp.param_groups[3*i+2]['params'][0]
+            elif self.config['loss_balancing']['type'] == 'moderate_local_NTK_weights':
+                K_max = K.max()
 
-                   # Encoder Dense (Modified MLP)
-                    if s.grad is None:
-                        print(f'\n s -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        s_grad = s.grad.cpu().numpy()
-                        term_grad_dict_key[key]['s'] = s_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['s']))
-                    
-                    if v.grad is None:
-                        print(f'\n v -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        v_grad = v.grad.cpu().numpy()
-                        term_grad_dict_key[key]['v'] = v_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['v']))
+                new_lambs = torch.tensor([ torch.sqrt(K_max / self.K[key]) for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
 
-
-                    if bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-
-        return all_param_grads
+            # update lambdas
+            self.term_lambdas_tensor = new_lambs
+        
+        else:
+            pass
     
-    def loss_balancing_save_grads(self, mlp, term_grad_dict_key):
+    def loss_balancing_save_grads(self, net, term_grad_dict_key, net_ID):
 
         all_param_grads = np.array([])
 
         for i,key in enumerate(term_grad_dict_key.keys()):
             
-            if i <= self.config['neuralNet']['num_layers']:
+            if i <= self.config[net_ID]['neuralNet']['num_layers']:
                 # Standard Dense 
-                if mlp.standard_dense.net[2*i].weight.grad is None:
+                if net.standard_dense.net[2*i].weight.grad is None:
                     print(f'\n Weights -> SKIP LAYER - standard dense {2*i}')
                 else:
-                    weight_grad = mlp.standard_dense.net[2*i].weight.grad.cpu().numpy()
+                    weight_grad = net.standard_dense.net[2*i].weight.grad.cpu().numpy()
                     term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
                     all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
 
 
-                if mlp.standard_dense.net[2*i].bias.grad is None:
+                if net.standard_dense.net[2*i].bias.grad is None:
                     print(f'\n Bias -> SKIP LAYER - standard dense {2*i}')
                 else:
-                    bias_grad = mlp.standard_dense.net[2*i].bias.grad.cpu().numpy()
+                    bias_grad = net.standard_dense.net[2*i].bias.grad.cpu().numpy()
                     term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
                     all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
             else:
 
                 if key == 'encoder_dense1_layer0':
                     # Encoder Dense (Modified MLP)
-                    if mlp.encoder_dense1.net[0].weight.grad is None:
+                    if net.encoder_dense1.net[0].weight.grad is None:
                         print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
                     else:
-                        weight_grad = mlp.encoder_dense1.net[0].weight.grad.cpu().numpy()
+                        weight_grad = net.encoder_dense1.net[0].weight.grad.cpu().numpy()
                         term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
                         all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
 
 
-                    if mlp.encoder_dense1.net[0].bias.grad is None:
+                    if net.encoder_dense1.net[0].bias.grad is None:
                         print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
                     else:
-                        bias_grad = mlp.encoder_dense1.net[0].bias.grad.cpu().numpy()
+                        bias_grad = net.encoder_dense1.net[0].bias.grad.cpu().numpy()
                         term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
                         all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
                
                 else: # 'encoder_dense2_layer0'
                    # Encoder Dense (Modified MLP)
-                    if mlp.encoder_dense2.net[0].weight.grad is None:
+                    if net.encoder_dense2.net[0].weight.grad is None:
                         print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
                     else:
-                        weight_grad = mlp.encoder_dense2.net[0].weight.grad.cpu().numpy()
+                        weight_grad = net.encoder_dense2.net[0].weight.grad.cpu().numpy()
                         term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
                         all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
 
 
-                    if mlp.encoder_dense2.net[0].bias.grad is None:
+                    if net.encoder_dense2.net[0].bias.grad is None:
                         print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
                     else:
-                        bias_grad = mlp.encoder_dense2.net[0].bias.grad.cpu().numpy()
+                        bias_grad = net.encoder_dense2.net[0].bias.grad.cpu().numpy()
                         term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
                         all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
 
         return all_param_grads
     
     def logger_call(self):
+
+        # Monitoring resources 
+        if self.config['logging']['monitoring_resources'] and self.regular_iter == 0:
+
+            self.log_log += "\n---------\n"
+
+            # CPU / system-RAM
+            self.log_log += get_cpu_memory_usage("") + "\n"
+
+            # GPU (if any)
+            if torch.cuda.is_available():
+                cuda_device = torch.device("cuda")  # default current device
+                self.log_log += get_cuda_memory_usage(cuda_device,"") + "\n"
+            else:
+                self.log_log += "No GPU detected\n"
         
         # Total and term losses
         loss_train = self.total_loss
         l2_error_u = self.l2_error_u
-        # l2_error_pressure = self.l2_error_pressure
+        
         
         # Access to the learning rate
         lr = self.optimizer_Adam.param_groups[0]['lr']
@@ -844,22 +1002,6 @@ f"""- {key}_loss: {self.term_loss_tensor_dict[key].item()}\n"""
             self.log_log = self.log_log + \
 f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
      
-        # Monitoring resources 
-        if self.config['logging']['monitoring_resources']:
-            gpu_load, gpu_memory = get_gpu_usage()
-            if gpu_load is not None:
-                self.log_log = self.log_log + \
-"\n---------\n" + \
-f"""- CPU usage: {get_cpu_usage()}% \n""" + \
-f"""- Memory usage: {get_memory_usage()}MB \n""" + \
-f"""- GPU usage: {gpu_load}% \n""" + \
-f"""- GPU memory usage: {gpu_memory}MB \n"""
-            else:
-                self.log_log = self.log_log + \
-"\n---------\n" + \
-f"""- CPU usage: {get_cpu_usage()}% \n""" + \
-f"""- Memory usage: {get_memory_usage()}MB \n""" + \
-f"""- No GPU detected \n"""
                 
         # Save into a .txt file
         with open(self.config['train_progress_file_path'], 'w') as file:
