@@ -31,6 +31,9 @@ class NullContainer:
         return None
     
 
+def exact_solution(x, t, c):
+    return  np.sin(x)*np.cos(c*t) - np.sin(c*t)*np.cos(x)
+
 def activation_func(case):
 
     if case == 'swish':
@@ -2217,7 +2220,7 @@ class Tester(nn.Module):
         # PDE parameters
         # self.R = self.config['pde_param']['R'] 
         
-    def test(self, dataloader, N_batches, branch_input, subset = 'test'):
+    def test_full(self, dataloader, N_batches, branch_input, subset = 'test'):
 
         print("### TESTING ... ###")
         history_log = f"""LOG TEST - {subset}_dataset\n"""
@@ -2228,17 +2231,18 @@ class Tester(nn.Module):
         custom_bar = trange(N_batches)
 
         f_tensor = []
+        num_samples = self.config['test']['batch_size']
+        target_device = self.config['device']
+
         for key in branch_input.keys():
-            f_array = np.tile(np.array(branch_input[key]), (self.config['test']['batch_size'],1))
-            f_tensor.append(torch.tensor(f_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
+                
+            base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]),dtype=torch.float32,device=target_device)
+                
+            final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+                
+            f_tensor.append(final_view)
 
-        # # PREDICTED
-        # idx_final = []
-        # for i, f_tensor_i in enumerate(f_tensor):
-        #     N_coord = f_tensor_i.shape[1]
-        #     idx = np.random.choice(N_coord,  round(0.01*N_coord), replace=False)
-        #     idx_final.append(np.sort(idx))
-
+       
         for batch_iter in custom_bar:
 
             batch, batch_labels = next(dataloader_iterator)
@@ -2249,13 +2253,6 @@ class Tester(nn.Module):
             # REFERENCE
             u_ref = outputs
            
-
-            # ----
-            # # Data transformation: From dimension to dimensionless
-            # inputs[:,0:3] = inputs[:,0:3]/self.config['pde_param']['2R_pipe']
-            # inputs[:,3:4] = self.config['pde_param']['omega']*inputs[:,3:4]
-
-            
 
             # PREDICTED
             with torch.no_grad():
@@ -2280,7 +2277,7 @@ class Tester(nn.Module):
             history_log = history_log + \
             "\n-------------------------\n" + \
             f"""Batch: {(batch_iter + 1)}/{(N_batches)} - 'l2_relative_error_vel': {l2_relative_error_u[batch_iter]} \n"""
-            # f"""Batch: {(batch_iter + 1)}/{(N_batches)} - 'l2_relative_error_vel': {l2_relative_error_vel[batch_iter]} - 'l2_relative_error_pressure': {l2_relative_error_pressure[batch_iter] } - 'pressure shift value': {shift_value.item()}\n"""
+         
             
         # Save into a .txt file
         with open(self.config['test_progress_file_path'], 'a') as file:
@@ -2291,580 +2288,77 @@ class Tester(nn.Module):
         
         print(f"Accuracy in {subset}dataset")
         print(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
-    
 
+    def test_value(self, t, c):
+        
 
-    def visualize_absolute_error_in_cross_sections(self, ds, y0, subset = 'full'):
+        # Exact
+        x_array = np.linspace(0, 1, 1000)[:,None]
         
-        # Ground Trust
-        inletPrm = ds.inletPrm
-        outletPrm = ds.outletPrm
-        wallPrm = ds.wallPrm
-        volumePrm = ds.volumePrm
-
-        coordinates_all = np.vstack([inletPrm.coordinates, outletPrm.coordinates, wallPrm.coordinates, volumePrm.coordinates])
-        vel_all = np.vstack([inletPrm.vel, outletPrm.vel, wallPrm.vel, volumePrm.vel])
-        pressure_all = np.vstack([inletPrm.pressure, outletPrm.pressure, wallPrm.pressure, volumePrm.pressure])
-
-        # Intersection plane - 3d geometry
-        tol = 0.00025
-        intersection_xyz, corresponding_vel, corresponding_pressure = cross_section_plane_intersection(coordinates_all, vel_all, pressure_all, y0, tolerance=tol)
+        u_exact = exact_solution(x_array, t, c)
         
-        # Grid in  y = y0 plane
-        x_min = min(intersection_xyz[:, 0])
-        x_max = max(intersection_xyz[:, 0])
-        z_min = min(intersection_xyz[:, 2])
-        z_max = max(intersection_xyz[:, 2])
-        grid_x, grid_z = np.mgrid[x_min:x_max:500j, z_min:z_max:500j]
-        
-        # REFERENCE
-        # Calculate the magnitude of the velocities
-        vel_ref = np.sqrt(np.sum(corresponding_vel**2, axis=1))
-        pressure_ref = np.squeeze(corresponding_pressure)
-        
-        # Interpolate vel onto the grid
-        vel_ref_grid = griddata(intersection_xyz[:, [0, 2]], vel_ref, (grid_x, grid_z), method='cubic')
-        pressure_ref_grid = griddata(intersection_xyz[:, [0, 2]], pressure_ref, (grid_x, grid_z), method='cubic')
+        u_exact_tensor = torch.tensor(u_exact, dtype=torch.float32, requires_grad = False).to(self.config['device'])
 
     
-        # PREDICTED
-        # Compute predicted in the grid
-        x_star = grid_x.flatten()[:,None]
-        y_star = y0 * np.ones_like(x_star)
-        z_star = grid_z.flatten()[:,None]
+        # N = 1, P = batch_size
+        t_array = np.repeat(np.array([t]), x_array.shape[0], axis=0)[:,None]
 
-        xyz_star = np.hstack([x_star, y_star, z_star])
-        xyz_star_tensor = torch.tensor(xyz_star, dtype = torch.float32, requires_grad= False).to(self.config['device'])
+        xt_array = np.hstack([x_array, t_array])
+
+        xt_tensor = torch.tensor(xt_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
+        f_a_i = c
+        f_a_array = np.repeat(np.array([f_a_i]),90)[None,:]
+        f_a_array = np.repeat(f_a_array, x_array.shape[0], axis = 0)
+        f_a_tensor = torch.tensor(f_a_array, dtype=torch.float32, requires_grad = False).to(self.config['device'])
         
-        # ----
-        # Data transformation: From dimension to dimensionless
-        xyz_star_tensor_dimless = xyz_star_tensor/self.config['pde_param']['2R_pipe']
+        
 
         with torch.no_grad():
-            NN_pred_tensor_dimless = self.forward(xyz_star_tensor_dimless)
+            tau = self.model.branch_list[0](f_a_tensor)
+            beta = self.model.trunk(xt_tensor)
+        u_pred_tensor = torch.sum(beta * tau, axis = 1)[:,None]
 
-        # Update parameters based on inlet velocity
-        self.config['pde_param']['V_inlet'] = self.config['test']['vel_max_inlet']
-        self.config['pde_param']['Re'] = self.config['pde_param']['rho_f']*self.config['pde_param']['2R_pipe']*self.config['pde_param']['V_inlet']/self.config['pde_param']['mu_f'] 
-
-        # Data transformation: From dimensionless to dimension
-        NN_pred_tensor = torch.zeros_like(NN_pred_tensor_dimless)
-        NN_pred_tensor[:,0:3] = NN_pred_tensor_dimless[:,0:3]*self.config['pde_param']['V_inlet']
-        NN_pred_tensor[:,3:4] = NN_pred_tensor_dimless[:,3:4]*(self.config['pde_param']['rho_f'] * self.config['pde_param']['V_inlet']**2)
-        # ----
-
-        vel_pred_grid_aux = torch.sqrt(torch.sum(NN_pred_tensor[:,0:3]**2, axis=1))
-        pressure_pred_grid_aux = NN_pred_tensor[:,3:4]
-
-        vel_pred_grid= vel_pred_grid_aux.cpu().numpy().reshape(grid_x.shape[0],grid_z.shape[0]).T
-        pressure_pred_grid = pressure_pred_grid_aux.cpu().numpy().reshape(grid_x.shape[0],grid_z.shape[0]).T
-
-        # Pressure shift adjustment
-        shift_all =  pressure_pred_grid - pressure_ref_grid
-        shift_value = np.mean(shift_all[~np.isnan(shift_all)])
-        pressure_pred_grid = pressure_pred_grid - shift_value
-
-        # Plotting purposes
-        # Fill points outside the ellipse with NaN 
-        ellipse = grid_x**2/((x_max-x_min)/2)**2 + grid_z**2/((z_max-z_min)/2)**2   
-        outside_ellipse = ellipse > 1
-
-        vel_pred_grid_for_plot = copy.deepcopy(vel_pred_grid)
-        vel_pred_grid_for_plot[outside_ellipse] = np.nan
-        pressure_pred_grid_for_plot = copy.deepcopy(pressure_pred_grid)
-        pressure_pred_grid_for_plot[outside_ellipse] = np.nan
-
-        ## Velocity
-        # Calculate the minimum and maximum values for the exact and predicted vel
-        vmin_vel = min(np.nanmin(vel_ref_grid), np.nanmin(vel_pred_grid_for_plot))
-        vmax_vel = max(np.nanmax(vel_ref_grid), np.nanmax(vel_pred_grid_for_plot))
-
-        # Plot
-        fig = plt.figure(figsize=(20, 5))
-
-        plt.subplot(1, 3, 1)
-        plt.pcolor(grid_x, grid_z, vel_ref_grid, cmap="jet", vmin=0, vmax=0.1)
-        cbar1 = plt.colorbar()
-        cbar1.set_ticks([0.00, 0.02, 0.04, 0.06, 0.08, 0.1])
-        cbar1.set_label(r'$|\boldsymbol{v}(\boldsymbol{x})|$ [m/s]', fontsize=24) 
-        cbar1.ax.tick_params(labelsize=18, colors='black')
-        plt.xlabel(r"$x_1$ [m]",fontsize=24)
-        plt.ylabel(r"$x_3$ [m]",fontsize=24)
-        plt.xticks(fontsize= 18)
-        plt.yticks(fontsize= 18)
         
-        plt.xticks(np.linspace(np.round(np.min(grid_x),3), np.round(np.max(grid_x),3), 5))  
-        plt.xlim([np.round(np.min(grid_x),3), np.round(np.max(grid_x),3)]) 
+        l2_relative_error = torch.linalg.norm((u_exact_tensor-u_pred_tensor), 2)/torch.linalg.norm(u_exact_tensor, 2)
+        print(f'l2_relative_error={l2_relative_error.item()} for t = {t} and c = {f_a_i}')
 
-        plt.yticks(np.linspace(np.round(np.min(grid_z),3), np.round(np.max(grid_z),3), 5))  
-        plt.ylim([np.round(np.min(grid_z),3), np.round(np.max(grid_z),3)]) 
+        u_pred = u_pred_tensor.cpu().numpy()
 
-        plt.title("Ground trust",fontsize=20)
-        plt.tight_layout()
+        return x_array, u_exact, u_pred
+    
+    
+    def visualize_comparison(self, t_all, f_a_i, x_final, u_exact_final, u_pred_final):
+       
 
+        fig, ax = plt.subplots(figsize=(5, 5))
 
-        plt.subplot(1, 3, 2)
-        plt.pcolor(grid_x, grid_z, vel_pred_grid_for_plot, cmap="jet", vmin=0, vmax=0.1)
-        cbar2 = plt.colorbar()
-        cbar2.set_ticks([0.00, 0.02, 0.04, 0.06, 0.08, 0.1])
-        cbar2.set_label(r'$|\boldsymbol{\hat{v}}_{\theta}(\boldsymbol{x})|$ [m/s]', fontsize=24) 
-        cbar2.ax.tick_params(labelsize=18, colors='black')
-        plt.xlabel(r"$x_1$ [m]",fontsize=24)
-        plt.ylabel(r"$x_3$ [m]",fontsize=24)
-        plt.xticks(fontsize= 18)
-        plt.yticks(fontsize= 18)
-        
-        plt.xticks(np.linspace(np.round(np.min(grid_x),3), np.round(np.max(grid_x),3), 5))  
-        plt.xlim([np.round(np.min(grid_x),3), np.round(np.max(grid_x),3)]) 
+        # Create a color gradient for lines and points
+        line_colors_exact = plt.cm.Blues(np.linspace(0.5, 1, len(t_all)))
+        line_colors_pred = plt.cm.Reds(np.linspace(0.5, 1, len(t_all)))
+        point_colors = plt.cm.Greens(np.linspace(0.5, 1, len(t_all)))
 
-        plt.yticks(np.linspace(np.round(np.min(grid_z),3), np.round(np.max(grid_z),3), 5))  
-        plt.ylim([np.round(np.min(grid_z),3), np.round(np.max(grid_z),3)]) 
+        for i,value in enumerate(t_all):
+            
+            ax.plot(x_final[i], u_exact_final[i], color=line_colors_exact[i], linewidth=3, label=f't = {value} and c = {f_a_i}')
+            ax.plot(x_final[i], u_pred_final[i], '--',color=line_colors_pred[i], linewidth=3)
+           
 
-        plt.title("Predicted",fontsize=20)
-        plt.tight_layout()
+        # Setting up the plot
+        ax.set_xlabel('x',fontsize=18)
+        ax.set_ylabel('u',fontsize=18)
+        plt.xticks(fontsize=18)
+        plt.yticks(fontsize=18)
+        ax.set_xlim(0, 1)
+        # ax.set_ylim(0.8, 4)
+        ax.set_ylim(-1, 1)
+        # ax.set_ylim(0.4, 2.5)
+        ax.legend()
+        # ax.set_title('Exact Solution for Different a Values')
 
-
-        abs_error_vel = np.empty_like(vel_ref_grid)
-        abs_error_vel[:,:] = np.nan 
-        abs_error_vel[~np.isnan(vel_ref_grid)] = abs(vel_ref_grid[~np.isnan(vel_ref_grid)] - vel_pred_grid[~np.isnan(vel_ref_grid)])
-        plt.subplot(1, 3, 3)
-        plt.pcolor(grid_x, grid_z, abs_error_vel, cmap="jet")
-        cbar3 = plt.colorbar()
-        cbar3.set_label(r'$abs(|\boldsymbol{v}(\boldsymbol{x})|-|\boldsymbol{\hat{v}}_{\theta}(\boldsymbol{x})|)$ [m/s]', fontsize=24) 
-        cbar3.ax.tick_params(labelsize=18, colors='black')
-        plt.xlabel(r"$x_1$ [m]",fontsize=24)
-        plt.ylabel(r"$x_3$ [m]",fontsize=24)
-        plt.xticks(fontsize= 18)
-        plt.yticks(fontsize= 18)
-
-        plt.xticks(np.linspace(np.round(np.min(grid_x),3), np.round(np.max(grid_x),3), 5))  
-        plt.xlim([np.round(np.min(grid_x),3), np.round(np.max(grid_x),3)]) 
-
-        plt.yticks(np.linspace(np.round(np.min(grid_z),3), np.round(np.max(grid_z),3), 5))  
-        plt.ylim([np.round(np.min(grid_z),3), np.round(np.max(grid_z),3)]) 
-
-        plt.title(f"Absolute error",fontsize=20)
-        plt.tight_layout()
-
-        plt.subplots_adjust(wspace=0.5) 
+        # plt.show()
 
         # Save the figure
-        fig_path = self.config['charts_folder_path'].joinpath(f'vel_absolute_error_in_y_{y0}.png')
+        fig_path = self.config['charts_folder_path'].joinpath(f'comparison_exact_vs_predicted_c_{f_a_i}.png')
         fig.savefig(fig_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
-        
-        ## Pressure
-        # Calculate the minimum and maximum values for the exact and predicted pressure
-        vmin_p = min(np.nanmin(pressure_ref_grid), np.nanmin(pressure_pred_grid_for_plot))
-        vmax_p = max(np.nanmax(pressure_ref_grid), np.nanmax(pressure_pred_grid_for_plot))
 
-
-        # Plot
-        fig1 = plt.figure(figsize=(20, 6))
-        plt.subplot(1, 3, 1)
-        plt.pcolor(grid_x, grid_z, pressure_ref_grid, cmap="jet", vmin=vmin_p, vmax=vmax_p)
-        plt.colorbar()
-        plt.xlabel("x (m)",fontsize=20)
-        plt.ylabel("z (m)",fontsize=20)
-        plt.title(f"Reference p (Pa) in y={y0}",fontsize=20)
-        plt.tight_layout()
-
-        plt.subplot(1, 3, 2)
-        plt.pcolor(grid_x, grid_z, pressure_pred_grid_for_plot, cmap="jet", vmin=vmin_p, vmax=vmax_p)
-        plt.colorbar()
-        plt.xlabel("x (m)",fontsize=20)
-        plt.ylabel("z (m)",fontsize=20)
-        plt.title(f"Predicted p (Pa) in y={y0}",fontsize=20)
-        plt.tight_layout()
-
-        abs_error_pressure = np.empty_like(pressure_ref_grid)
-        abs_error_pressure[:,:] = np.nan 
-        abs_error_pressure[~np.isnan(pressure_ref_grid)] = abs(pressure_ref_grid[~np.isnan(pressure_ref_grid)] - pressure_pred_grid[~np.isnan(pressure_ref_grid)])
-        plt.subplot(1, 3, 3)
-        plt.pcolor(grid_x, grid_z, abs_error_pressure, cmap="jet")
-        plt.colorbar()
-        plt.xlabel("x (m)",fontsize=20)
-        plt.ylabel("z (m)",fontsize=20)
-        plt.title(f"Absolute error of p (Pa) in y={y0}",fontsize=20)
-        plt.tight_layout()
-
-        # Save the figure
-        fig1_path2 = self.config['charts_folder_path'].joinpath(f'pressure_absolute_error_in_y_{y0}.png')
-        fig1.savefig(fig1_path2, bbox_inches="tight", dpi=300)
-        plt.close(fig1)
-
-
-        self.config['logger'].info("#-----------------------------------------#")
-        self.config['logger'].info(f"Accuracy in plane y={y0} - {subset}_dataset")
-        
-        self.config['logger'].info(f"max absolute error in magnitude of vel: {np.max(abs_error_vel[~np.isnan(vel_ref_grid)])}")
-        self.config['logger'].info(f"min absolute error in magnitude of vel: {np.min(abs_error_vel[~np.isnan(vel_ref_grid)])}")
-        self.config['logger'].info(f"mean absolute error in magnitude of vel: {np.mean(abs_error_vel[~np.isnan(vel_ref_grid)])}")
-        
-        self.config['logger'].info(f"max absolute error in pressure: {np.max(abs_error_pressure[~np.isnan(pressure_ref_grid)])}")
-        self.config['logger'].info(f"min absolute error in pressure: {np.min(abs_error_pressure[~np.isnan(pressure_ref_grid)])}")
-        self.config['logger'].info(f"mean absolute error in pressure: {np.mean(abs_error_pressure[~np.isnan(pressure_ref_grid)])}")
-        
-        print("#-----------------------------------------#")
-        print(f"Accuracy in plane y={y0}  - {subset}_dataset")
-        
-        print(f"max absolute error in magnitude of vel: {np.max(abs_error_vel[~np.isnan(vel_ref_grid)])}")
-        print(f"min absolute error in magnitude of vel: {np.min(abs_error_vel[~np.isnan(vel_ref_grid)])}")
-        print(f"mean absolute error in magnitude of vel: {np.mean(abs_error_vel[~np.isnan(vel_ref_grid)])}")
-        
-        print(f"max absolute error in pressure: {np.max(abs_error_pressure[~np.isnan(pressure_ref_grid)])}")
-        print(f"min absolute error in pressure: {np.min(abs_error_pressure[~np.isnan(pressure_ref_grid)])}")
-        print(f"mean absolute error in pressure: {np.mean(abs_error_pressure[~np.isnan(pressure_ref_grid)])}")
-
-    def visualize_absolute_error_in_longitudinal_section(self, ds, z0, subset):
-        
-       # Ground Trust
-        inletPrm = ds.inletPrm
-        outletPrm = ds.outletPrm
-        wallPrm = ds.wallPrm
-        volumePrm = ds.volumePrm
-
-        coordinates_all = np.vstack([inletPrm.coordinates, outletPrm.coordinates, wallPrm.coordinates, volumePrm.coordinates])
-        vel_all = np.vstack([inletPrm.vel, outletPrm.vel, wallPrm.vel, volumePrm.vel])
-        pressure_all = np.vstack([inletPrm.pressure, outletPrm.pressure, wallPrm.pressure, volumePrm.pressure])
-
-        # Intersection plane - 3d geometry
-        tol = 0.00030195  
-        intersection_xyz, corresponding_vel, corresponding_pressure = longitudinal_plane_intersection(coordinates_all, vel_all, pressure_all, z0, tolerance=tol)
-        
-    
-        # Grid in  z = z0 plane
-        x_min = min(intersection_xyz[:, 0])
-        x_max = max(intersection_xyz[:, 0])
-        y_min = min(intersection_xyz[:, 1])
-        y_max = max(intersection_xyz[:, 1])
-        grid_x, grid_y = np.mgrid[x_min:x_max:100j, y_min:y_max:200j]
-        
-
-        # REFERENCE
-        # Calculate the magnitude of the velocities
-        vel_ref = np.sqrt(np.sum(corresponding_vel**2, axis=1))
-        pressure_ref = np.squeeze(corresponding_pressure)
-
-
-        # Interpolate vel onto the grid
-        vel_ref_grid = griddata(intersection_xyz[:, [0, 1]], vel_ref, (grid_x, grid_y), method='cubic')
-        pressure_ref_grid = griddata(intersection_xyz[:, [0, 1]], pressure_ref, (grid_x, grid_y), method='cubic')
-
-    
-        # PREDICTED
-        # Compute predicted in the grid
-        x_star = grid_x.flatten()[:,None]
-        y_star = grid_y.flatten()[:,None]
-        z_star = z0 * np.ones_like(x_star)
-
-        xyz_star = np.hstack([x_star, y_star, z_star])
-        xyz_star_tensor = torch.tensor(xyz_star, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-        
-        # ----
-        # Data transformation: From dimension to dimensionless
-        xyz_star_tensor_dimless = xyz_star_tensor/self.config['pde_param']['2R_pipe']
-
-        with torch.no_grad():
-            NN_pred_tensor_dimless = self.forward(xyz_star_tensor_dimless)
-
-        # Update parameters based on inlet velocity
-        self.config['pde_param']['V_inlet'] = self.config['test']['vel_max_inlet']
-        self.config['pde_param']['Re'] = self.config['pde_param']['rho_f']*self.config['pde_param']['2R_pipe']*self.config['pde_param']['V_inlet']/self.config['pde_param']['mu_f'] 
-
-        # Data transformation - From dimensionless to dimension
-        NN_pred_tensor = torch.zeros_like(NN_pred_tensor_dimless)
-        NN_pred_tensor[:,0:3] = NN_pred_tensor_dimless[:,0:3]*self.config['pde_param']['V_inlet']
-        NN_pred_tensor[:,3:4] = NN_pred_tensor_dimless[:,3:4]*(self.config['pde_param']['rho_f'] * self.config['pde_param']['V_inlet']**2)
-        # ----
-
-        vel_pred_grid_aux = torch.sqrt(torch.sum(NN_pred_tensor[:,0:3]**2, axis=1))
-        pressure_pred_grid_aux = NN_pred_tensor[:,3:4]
-
-        vel_pred_grid = vel_pred_grid_aux.cpu().numpy().reshape(grid_x.shape[0],grid_y.shape[1])
-        pressure_pred_grid = pressure_pred_grid_aux.cpu().numpy().reshape(grid_x.shape[0],grid_y.shape[1])
-
-        # Pressure shift adjustment
-        shift_all =  pressure_pred_grid - pressure_ref_grid
-        shift_value = np.mean(shift_all[~np.isnan(shift_all)])
-        pressure_pred_grid = pressure_pred_grid - shift_value
-
-        
-        # Plotting purposes
-        coordinates_boundary = np.vstack([inletPrm.coordinates, outletPrm.coordinates, wallPrm.coordinates])
-        vel_boundary = np.vstack([inletPrm.vel, outletPrm.vel, wallPrm.vel])
-        pressure_boundary = np.vstack([inletPrm.pressure, outletPrm.pressure, wallPrm.pressure])
-        
-        # Intersection plane - 3d geometry
-        tol = 0.0005  
-        boundary_xyz, _, _ = longitudinal_plane_intersection(coordinates_boundary, vel_boundary, pressure_boundary, z0, tolerance=tol)
-        
-
-        vertices = np.vstack((boundary_xyz[:, [0, 1]], boundary_xyz[0, [0, 1]]))
-        
-        # Calculate the centroid of the shape
-        centroid = np.mean(vertices[:-1], axis=0)  # Exclude the closing vertex
-        centroid[1] = centroid[1] - 0.05 # Recolocate the centroid based on the shape of the geometry 
-
-        # Sort the vertices by angle from the centroid
-        def angle_from_centroid(vertex):
-            return np.arctan2(vertex[1] - centroid[1], vertex[0] - centroid[0])
-
-        sorted_vertices = sorted(vertices[:-1], key=angle_from_centroid) 
-        sorted_vertices.append(sorted_vertices[0])  # Close the shape
-
-        # Convert to a numpy array
-        sorted_vertices = np.array(sorted_vertices)
-        # Matplotlib Path
-        boundary_path = mpath(sorted_vertices)
-
-        def inside_boundary(x, y):
-            return boundary_path.contains_point(np.array([x, y]))
-
-        vel_pred_grid_masked = copy.deepcopy(vel_pred_grid)  
-        pressure_pred_grid_masked = copy.deepcopy(pressure_pred_grid)
-        vel_ref_grid_masked = copy.deepcopy(vel_ref_grid)  
-        pressure_ref_grid_masked = copy.deepcopy(pressure_ref_grid)
-        
-        
-        for i in range(vel_pred_grid_masked.shape[0]):
-            
-            for j in range(vel_pred_grid_masked.shape[1]):
-                
-                if not inside_boundary(grid_x[i, j], grid_y[i, j]):
-                    # Set values outside the boundary to NaN
-                    vel_pred_grid_masked[i, j] = np.nan  
-                    pressure_pred_grid_masked[i, j] = np.nan  
-                    vel_ref_grid_masked[i, j] = np.nan  
-                    pressure_ref_grid_masked[i, j] = np.nan 
-              
-        ## Velocity
-        # Calculate the minimum and maximum values for the exact and predicted vel
-        vmin_vel = min(np.nanmin(vel_ref_grid_masked), np.nanmin(vel_pred_grid_masked))
-        vmax_vel = max(np.nanmax(vel_ref_grid_masked), np.nanmax(vel_pred_grid_masked))
-
-        # Plot
-        fig = plt.figure(figsize=(18, 12))
-        plt.subplot(1, 3, 1)
-        plt.pcolor(grid_x, grid_y, vel_ref_grid_masked, cmap="jet", vmin=vmin_vel, vmax=vmax_vel)
-        plt.colorbar()
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.title(f"Vel - Exact in z={z0}")
-
-        plt.subplot(1, 3, 2)
-        plt.pcolor(grid_x, grid_y, vel_pred_grid_masked, cmap="jet", vmin=vmin_vel, vmax=vmax_vel)
-        plt.colorbar()
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.title(f"Vel - Predicted in z={z0}")
-
-        abs_error_vel = np.empty_like(vel_ref_grid_masked)
-        abs_error_vel[:,:] = np.nan 
-        abs_error_vel[~np.isnan(vel_ref_grid_masked)] = abs(vel_ref_grid_masked[~np.isnan(vel_ref_grid_masked)] - vel_pred_grid_masked[~np.isnan(vel_ref_grid_masked)])
-        plt.subplot(1, 3, 3)
-        plt.pcolor(grid_x, grid_y, abs_error_vel, cmap="jet")
-        plt.colorbar()
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.title(f"Vel - Absolute error in z={z0}")
-
-        # Save the figure
-        fig_path = self.config['charts_folder_path'].joinpath(f'vel_absolute_error_in_z_{z0}.png')
-        fig.savefig(fig_path, bbox_inches="tight", dpi=100)
-        
-        ## Pressure
-        # Calculate the minimum and maximum values for the exact and predicted pressure
-        vmin_p = min(np.nanmin(pressure_ref_grid_masked), np.nanmin(pressure_pred_grid_masked))
-        vmax_p = max(np.nanmax(pressure_ref_grid_masked), np.nanmax(pressure_pred_grid_masked))
-
-
-        # Plot
-        fig1 = plt.figure(figsize=(18, 12))
-        plt.subplot(1, 3, 1)
-        plt.pcolor(grid_x, grid_y, pressure_ref_grid_masked, cmap="jet", vmin=vmin_p, vmax=vmax_p)
-        plt.colorbar()
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.title(f"Pressure - Exact in z={z0}")
-
-        plt.subplot(1, 3, 2)
-        plt.pcolor(grid_x, grid_y, pressure_pred_grid_masked, cmap="jet", vmin=vmin_p, vmax=vmax_p)
-        plt.colorbar()
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.title(f"Pressure - Predicted in z={z0}")
-
-        abs_error_pressure = np.empty_like(pressure_ref_grid_masked)
-        abs_error_pressure[:,:] = np.nan 
-        abs_error_pressure[~np.isnan(pressure_ref_grid_masked)] = abs(pressure_ref_grid_masked[~np.isnan(pressure_ref_grid_masked)] - pressure_pred_grid_masked[~np.isnan(pressure_ref_grid_masked)])
-        plt.subplot(1, 3, 3)
-        plt.pcolor(grid_x, grid_y, abs_error_pressure, cmap="jet")
-        plt.colorbar()
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.title(f"Pressure - Absolute error in y={z0}")
-
-        # Save the figure
-        fig1_path = self.config['charts_folder_path'].joinpath(f'pressure_absolute_error_in_z_{z0}.png')
-        fig1.savefig(fig1_path, bbox_inches="tight", dpi=100)
-
-
-        self.config['logger'].info("#-----------------------------------------#")
-        self.config['logger'].info(f"Accuracy in plane z={z0} - {subset}_dataset")
-        
-        self.config['logger'].info(f"max absolute error in magnitude of vel: {np.max(abs_error_vel[~np.isnan(vel_ref_grid_masked)])}")
-        self.config['logger'].info(f"min absolute error in magnitude of vel: {np.min(abs_error_vel[~np.isnan(vel_ref_grid_masked)])}")
-        self.config['logger'].info(f"mean absolute error in magnitude of vel: {np.mean(abs_error_vel[~np.isnan(vel_ref_grid_masked)])}")
-        
-        self.config['logger'].info(f"max absolute error in pressure: {np.max(abs_error_pressure[~np.isnan(pressure_ref_grid_masked)])}")
-        self.config['logger'].info(f"min absolute error in pressure: {np.min(abs_error_pressure[~np.isnan(pressure_ref_grid_masked)])}")
-        self.config['logger'].info(f"mean absolute error in pressure: {np.mean(abs_error_pressure[~np.isnan(pressure_ref_grid_masked)])}")
-        
-        print("#-----------------------------------------#")
-        print(f"Accuracy in plane z={z0}  - {subset}_dataset")
-        
-        print(f"max absolute error in magnitude of vel: {np.max(abs_error_vel[~np.isnan(vel_ref_grid_masked)])}")
-        print(f"min absolute error in magnitude of vel: {np.min(abs_error_vel[~np.isnan(vel_ref_grid_masked)])}")
-        print(f"mean absolute error in magnitude of vel: {np.mean(abs_error_vel[~np.isnan(vel_ref_grid_masked)])}")
-        
-        print(f"max absolute error in pressure: {np.max(abs_error_pressure[~np.isnan(pressure_ref_grid_masked)])}")
-        print(f"min absolute error in pressure: {np.min(abs_error_pressure[~np.isnan(pressure_ref_grid_masked)])}")
-        print(f"mean absolute error in pressure: {np.mean(abs_error_pressure[~np.isnan(pressure_ref_grid_masked)])}")
-
-    def visualize_absolute_error(self, flow_label, branch_input):
-        
-        # flow_label = self.config['dataset']['chosen_flow_label']
-        planes_folder = self.config['dataset']['planes_folder_name']
-        t_values = self.config['test']['t_values']
-        
-        planes_path = self.config['data_path'].joinpath(f'STRATA_{flow_label}/{planes_folder}/')
-
-        # Get a list of files
-        timestep_folders = os.listdir(planes_path)
-        timestep_folders_floats = list(map( lambda x : float('0.' + x.split('_')[1]), timestep_folders))
-        
-        for time in t_values:
-            
-            idx = timestep_folders_floats.index(time)
-            fixed_timestep_folder = timestep_folders[idx]
-
-            planes_timestep_path = self.config['data_path'].joinpath(f'STRATA_{flow_label}/{planes_folder}/{fixed_timestep_folder}')
-            # Get a list of files
-            plane_files = os.listdir(planes_timestep_path)
-
-            for filename in plane_files:
-                if filename == 'planez0.txt':
-                    data = np.loadtxt(planes_timestep_path.joinpath(filename), skiprows=1)
-                    
-                    dims3 = (data.shape[0],3)
-                    dims1 = (data.shape[0],1)
-                    
-                    xyz = np.zeros((dims3))
-                    corresponding_vel = np.zeros((dims3))
-                    corresponding_pressure  = np.zeros((dims1))
-
-                    xyz = data[:,1:4]
-                    corresponding_vel = data[:,4:7]
-                    corresponding_pressure  = data[:,7:8]
-
-                    # REFERENCE
-                    vel_ref = np.sqrt(np.sum(corresponding_vel**2, axis=1))
-                    pressure_ref = np.squeeze(corresponding_pressure)
-                
-                    # PREDICTED
-                    
-                    # ----
-                    # Data transformation: From dimension to dimensionless
-                    x_star_dimless = xyz[:,0][:,None]/self.config['pde_param']['2R_pipe']
-                    y_star_dimless = xyz[:,1][:,None]/self.config['pde_param']['2R_pipe']
-                    z_star_dimless = xyz[:,2][:,None]/self.config['pde_param']['2R_pipe']
-                    t_star_dimless = self.config['pde_param']['omega']* time * np.ones_like(x_star_dimless)
-
-                    xyzt_star_dimless = np.hstack([x_star_dimless, y_star_dimless, z_star_dimless, t_star_dimless])
-                    xyzt_star_tensor_dimless = torch.tensor(xyzt_star_dimless, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-                    
-
-                    # with torch.no_grad():
-                    #     NN_pred_tensor_dimless = self.model.forward(xyzt_star_tensor_dimless)
-
-                
-                    # # Data transformation: From dimensionless to dimension
-                    # NN_pred_tensor = torch.zeros_like(NN_pred_tensor_dimless)
-                    # NN_pred_tensor[:,0:3] = NN_pred_tensor_dimless[:,0:3]*self.config['pde_param']['V_inlet_max']
-                    # NN_pred_tensor[:,3:4] = NN_pred_tensor_dimless[:,3:4]*(self.config['pde_param']['rho_f'] * self.config['pde_param']['V_inlet_max']**2)
-                    # PREDICTED
-                    f_tensor = []
-                    for key in branch_input.keys():
-                        f_array = np.tile(np.array(branch_input[key]), (xyzt_star_tensor_dimless.shape[0],1))
-                        f_tensor.append(torch.tensor(f_array, dtype = torch.float32, requires_grad= False).to(self.config['device']))
-
-                    # PREDICTED
-                    
-                    with torch.no_grad():
-                        tau = []
-                        for i, f_tensor_i in enumerate(f_tensor):
-                            # N_coord = f_tensor_i.shape[1]
-                            # idx = np.random.choice(N_coord,  round(0.01*N_coord), replace=False)
-                            # idx = np.sort(idx)
-                            # tau.append(self.model.branch_list[i](f_tensor_i[:,idx]))
-                            tau.append(self.model.branch_list[i](f_tensor_i))
-                        beta = self.model.trunk(xyzt_star_tensor_dimless)
-
-                        # Predicted
-                        if len(self.config['branches_control']['branch_list_ID']) == 1:
-                            v1_pred = torch.sum(tau[0][:,0:100] * beta[:,0:100], axis = 1)[:, None]
-                            v2_pred = torch.sum(tau[0][:,100:200] * beta[:,100:200], axis = 1)[:, None]
-                            v3_pred = torch.sum(tau[0][:,200:300] * beta[:,200:300], axis = 1)[:, None]
-                            p_pred = torch.sum(tau[0][:,300:400] * beta[:,300:400], axis = 1)[:, None]
-                        else:
-                            v1_pred = torch.sum(reduce(lambda x, y: x[:, 0:100] * y[:, 0:100], tau) * beta[:,0:100], axis = 1)[:, None]
-                            v2_pred = torch.sum(reduce(lambda x, y: x[:,100:200] * y[:,100:200], tau) * beta[:,100:200], axis = 1)[:, None]
-                            v3_pred = torch.sum(reduce(lambda x, y: x[:,200:300] * y[:,200:300], tau) * beta[:,200:300], axis = 1)[:, None]
-                            p_pred = torch.sum(reduce(lambda x, y: x[:,300:400] * y[:,300:400], tau) * beta[:,300:400], axis = 1)[:, None]
-
-                        v_pred = torch.cat((v1_pred,v2_pred,v3_pred), axis = 1)
-            
-                    # Data transformation: From dimensionless to dimension
-                    v_pred = v_pred*self.config['pde_param']['V_inlet_max']
-                    p_pred = p_pred*(self.config['pde_param']['rho_f'] * self.config['pde_param']['V_inlet_max']**2)
-                    # ----
-                    # ----
-            
-
-                    vel_pred_aux = torch.sqrt(torch.sum(v_pred[:,0:3]**2, axis=1))
-                    pressure_pred_aux = p_pred[:,0]
-
-                    vel_pred = vel_pred_aux.cpu().numpy()
-                    pressure_pred = pressure_pred_aux.cpu().numpy()
-
-                    ## Relative L2 error
-                    vel_l2_error = np.linalg.norm((vel_ref-vel_pred), 2)/np.linalg.norm(vel_ref, 2)
-                    p_l2_error = np.linalg.norm((pressure_ref-pressure_pred), 2)/np.linalg.norm(pressure_ref, 2)
-
-
-                    self.config['logger'].info("#-----------------------------------------#")
-                    self.config['logger'].info(f"Accuracy in {filename} and time={time} - full_dataset")
-                            
-                    self.config['logger'].info(f"Relative L2 error - Vel: {vel_l2_error}")
-                    self.config['logger'].info(f"Relative L2 error - Pressure: {p_l2_error}")
-
-                    ### Plots
-                    idx1, idx2, xlabel, ylabel, plane_name, plane_value = extract_info(filename)
-                    
-                    plot_magnitude_and_save_absolute_error(self.config, xyz,vel_ref, vel_pred, idx1, idx2, xlabel, ylabel, plane_name,time, ID=f'Deb{flow_label}_Vel')
-                    plot_magnitude_and_save_absolute_error(self.config, xyz,pressure_ref, pressure_pred, idx1, idx2, xlabel, ylabel, plane_name,time, ID=f'Deb{flow_label}_Pressure')
-                    
-                    del xyzt_star_tensor_dimless
-                    del f_tensor
-                    del tau
-                    del beta
-                    del v1_pred
-                    del v2_pred
-                    del v3_pred
-                    del p_pred
-                    del v_pred
-                    del vel_pred_aux
-                    del pressure_pred_aux
-                    del vel_l2_error
-                    del p_l2_error

@@ -12,8 +12,8 @@ project:
 
 dataset:
   path: '.dataset'
-  generate: false # true or false
-  processing: false  # true or false
+  generate: true # true or false
+  processing: true  # true or false
   train_fraction: 0.68
   # val_fraction: 0.02
   test_fraction: 0.3 
