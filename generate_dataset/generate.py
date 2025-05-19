@@ -1,10 +1,9 @@
-import os
 from pathlib import Path
 
 import numpy as np
 from tqdm import trange
 
-from generate_dataset.ground_trust import governing_equation
+from generate_dataset.ground_trust import governing_equation, boundary_condition
 
 
 def generate_call(config):
@@ -44,6 +43,8 @@ def generate_call(config):
               
                 if stratum == 'PHY':
                     governing_equation(cwd, varying_param[i], varying_param_label[i], stratum, N_coll, t_i)
+                elif stratum == 'BC':
+                    boundary_condition(cwd, varying_param_label[i], stratum, t_i)
 
     print("### Dataset successfully generated!")
         

@@ -21,7 +21,7 @@ dataset:
   test_fraction: 0.3 
   varying_param: [0.5,0.875,1.25,1.625,2.0,0.56,0.67,0.93,1.12,1.5,1.73,1.95] # parameter c
   varying_param_label: ['C05','C0875','C125','C1625','C20','C056','C067','C093','C112','C15','C173','C195'] # folder_ID
-  strata_labels: ['PHY']
+  strata_labels: ['PHY','BC']
   state_vector_labels: ['coord_x','u'] 
   N_samples_per_stratum: {'N_coll': 10000}
   initial_time: 0.0
@@ -36,7 +36,7 @@ pde_param:
 
 branch1:
   neuralNet:
-    architecture : "Modified MLP"  # "Mlp" or "Modified MLP"
+    architecture : "MLP"  # "Mlp" or "Modified MLP"
     in_dim : 90  # 'm_input_sensors' 
     num_layers : 3
     hidden_dim : 75
@@ -51,7 +51,7 @@ branches_control:
 
 trunk:
   neuralNet:
-    architecture : "Modified MLP"  # "Mlp" or "Modified MLP"
+    architecture : "MLP"  # "Mlp" or "Modified MLP"
     in_dim : 2
     num_layers : 3
     hidden_dim : 50
@@ -118,14 +118,17 @@ random_weight_fact:  # Random Weight Factorization
   stddev : 0.1
 
 
-loss_terms: ["phy", "ic", "data"]
-lambda_weights_init: [1.0, 1.0, 1.0]
+loss_terms: ["phy","bc", "ic", "data"]
+lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
 
 loss_balancing:
-  scheme: 'ntk_guided_weights'
+  scheme: 'no_weights'
   enabled: true
-  type: 'moderate_local_NTK_weights' # 'global_NTK_weights', 'local_NTK_weights', 'moderate_local_NTK_weights'
-  update_step: 500
+  
+  # scheme: 'ntk_guided_weights'
+  # enabled: true
+  # type: 'moderate_local_NTK_weights' # 'global_NTK_weights', 'local_NTK_weights', 'moderate_local_NTK_weights'
+  # update_step: 500
   
   
   # enabled: true
