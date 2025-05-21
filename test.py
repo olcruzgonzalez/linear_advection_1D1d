@@ -19,7 +19,7 @@ from utils import convert_to_json, get_subset_ds_deeponet, create_dataset_for_te
 
 def testing_call(config):
 
-     # Recreate the model instance
+    # Recreate the model instance
     config['logger'].info("Recreate the model instance")
     model = NeuralNetwork(config = config)
     
@@ -40,10 +40,11 @@ def testing_call(config):
     for idx, ID in enumerate(config['test']['test_param_label']):
 
         # Load data
+        config['logger'].info("Loading dataset - full")
         timePrm, full_ds = get_subset_ds_deeponet(config, ID, 'full')
         # timePrm, max_inlet_velocity, full_ds = get_subset_ds_deeponet(config, ID, 'temporaltest')
 
-        config['logger'].info("Create dataset for test")
+        config['logger'].info("Create dataset for test - dataloader")
         dataloader_full, N_batches_full = create_dataset_for_test(config, full_ds, timePrm)
 
         # Branch
@@ -54,16 +55,18 @@ def testing_call(config):
         
         branch_input[config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([config['test']['test_param'][idx]]),90)[None,:])
         
-        
+        print("### Testing ... ###")
         config['logger'].info("### Testing ...")
         tester = Tester(config, model)
         
         # Testing
         # ID = config['dataset']['chosen_flow_label']
         config['logger'].info("#-----------------------------------------#")
+        config['logger'].info("#-----------------------------------------#")
         config['logger'].info(f"TESTING ON {ID} - 'full'")
         config['logger'].info("#-----------------------------------------#")
-        tester.test_full(dataloader_full, N_batches_full, branch_input, subset = 'full')
+        config['logger'].info("#-----------------------------------------#")
+        tester.test_full(dataloader_full, N_batches_full, branch_input, subset = 'full', param_label = ID)
         
         config['logger'].info("#-----------------------------------------#")
         config['logger'].info(f"TESTING ON {ID} - 'temporaltest'")
@@ -77,14 +80,22 @@ def testing_call(config):
         u_pred_final = []
        
         for t_i in config['test']['t_values']:
-            x_array, u_exact, u_pred = tester.test_value(t_i, config['test']['test_param'][idx])
+
+            c = config['test']['test_param'][idx]
+            config['logger'].info(f"TESTING ON {ID} - value {t_i}")
+            x_array, u_exact, u_pred, l2_relative_error = tester.test_value(t_i, c)
+            
+            config['logger'].info(f'l2_relative_error={l2_relative_error} for t = {t_i} and c = {c}')
             
             x_array_final.append(x_array)
             u_exact_final.append(u_exact)
             u_pred_final.append(u_pred)
             
-
-        tester.visualize_comparison(config['test']['t_values'], config['test']['test_param'][idx], x_array_final, u_exact_final, u_pred_final)
+        
+        tester.visualize_comparison_per_value(config['test']['t_values'], c, x_array_final, u_exact_final, u_pred_final)
+        
+        print("### Visualize comparison full domain ###")
+        tester.visualize_comparison_fulldomain(branch_input, c)
         
         
 

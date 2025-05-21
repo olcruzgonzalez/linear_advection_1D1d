@@ -2109,10 +2109,9 @@ class Tester(nn.Module):
         # PDE parameters
         # self.R = self.config['pde_param']['R'] 
         
-    def test_full(self, dataloader, N_batches, branch_input, subset = 'test'):
+    def test_full(self, dataloader, N_batches, branch_input, subset = 'test', param_label = None):
 
-        print("### TESTING ... ###")
-        history_log = f"""LOG TEST - {subset}_dataset\n"""
+        history_log = f"""LOG TEST ON {param_label} - {subset}_dataset\n"""
        
         l2_relative_error_u = []
         
@@ -2172,10 +2171,10 @@ class Tester(nn.Module):
         with open(self.config['test_progress_file_path'], 'a') as file:
             file.write(history_log + '\n\n\n')
 
-        self.config['logger'].info(f"Accuracy in Test - {subset}_dataset")
+        self.config['logger'].info(f"Accuracy in {param_label} - {subset}_dataset")
         self.config['logger'].info(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
         
-        print(f"Accuracy in {subset}dataset")
+        print(f"Accuracy in {param_label} - {subset}dataset")
         print(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
 
     def test_value(self, t, c):
@@ -2212,10 +2211,11 @@ class Tester(nn.Module):
         print(f'l2_relative_error={l2_relative_error.item()} for t = {t} and c = {f_a_i}')
 
         u_pred = u_pred_tensor.cpu().numpy()
+        
 
-        return x_array, u_exact, u_pred
+        return x_array, u_exact, u_pred, l2_relative_error.item()
     
-    def visualize_comparison(self, t_all, f_a_i, x_final, u_exact_final, u_pred_final):
+    def visualize_comparison_per_value(self, t_all, f_a_i, x_final, u_exact_final, u_pred_final):
        
 
         fig, ax = plt.subplots(figsize=(5, 5))
@@ -2238,7 +2238,7 @@ class Tester(nn.Module):
         plt.yticks(fontsize=18)
         ax.set_xlim(0, 1)
         # ax.set_ylim(0.8, 4)
-        ax.set_ylim(-1, 1)
+        ax.set_ylim(-0.5, 1.5)
         # ax.set_ylim(0.4, 2.5)
         ax.legend()
         # ax.set_title('Exact Solution for Different a Values')
@@ -2249,4 +2249,94 @@ class Tester(nn.Module):
         fig_path = self.config['charts_folder_path'].joinpath(f'comparison_exact_vs_predicted_c_{f_a_i}.png')
         fig.savefig(fig_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
+    
+     
+    def visualize_comparison_fulldomain(self, branch_input, c):
+            
+        # ------------------------------------------------------------------
+        # 1. Create a *regular space-time grid* with a single, unambiguous rule:
+        #    - first axis  →  time  (Nt points)
+        #    - second axis →  space (Nx points)
+        # ------------------------------------------------------------------
+        t_star = np.linspace(0.0, 1.0, 100)      # Nt
+        x_star = np.linspace(0.0, 1.0, 1000)     # Nx
 
+        TT, XX = np.meshgrid(t_star, x_star, indexing="ij")  # TT,XX ∈ ℝ[Nt,Nx]
+
+        t_flat = TT.reshape(-1, 1)               # ℝ[Nt·Nx,1]
+        x_flat = XX.reshape(-1, 1)
+
+        # ------------------------------------------------------------------
+        # 2. Exact solution on the same grid
+        # ------------------------------------------------------------------
+        u_ref = u_close_form(x_flat, t_flat, c)  # expects (x,t,c)
+
+        # ------------------------------------------------------------------
+        # 3. Convert to torch & push through the network  (xt order)
+        # ------------------------------------------------------------------
+        device = self.config["device"]
+
+        t = torch.as_tensor(t_flat, dtype=torch.float32, device=device)
+        x = torch.as_tensor(x_flat, dtype=torch.float32, device=device)
+
+        # >>> trunk expects (x , t)  <<<  so concatenate in that order
+        xt = torch.cat([x, t], dim=1)        # shape: (N, 2)
+
+        # == Branch inputs (unchanged) =====================================
+        f_tensor = []
+        num_samples = xt.shape[0]
+        for i, key in enumerate(branch_input.keys()):
+            base = torch.as_tensor(np.vstack(branch_input[key]),
+                                dtype=torch.float32,
+                                device=device)
+            f_tensor.append(base.unsqueeze(0).expand(num_samples, -1, -1))
+
+        # == PINN prediction ===============================================
+        with torch.no_grad():
+            tau = [self.model.branch_list[i](f_tensor_i) for i, f_tensor_i in enumerate(f_tensor)]
+            beta = self.model.trunk(xt)      # <<<<<<<< uses xt
+            tau[0] = tau[0].view(-1, 50)
+            u_pred = (tau[0] * beta).sum(dim=1, keepdim=True)
+        # ------------------------------------------------------------------
+        # 4. Error metrics
+        # ------------------------------------------------------------------
+        l2_relative_error = metric_l2_relative_error(
+            exact=torch.as_tensor(u_ref, device=device, dtype=torch.float32),
+            pred=u_pred
+        )
+
+        self.config['logger'].info(f'l2_relative_error={l2_relative_error} for c = {c}')
+        print(f'l2_relative_error={l2_relative_error} for c = {c}')
+
+        # ------------------------------------------------------------------
+        # 5. Reshape back to (Nt,Nx) – NO transposes, the axes are correct
+        # ------------------------------------------------------------------
+        Nt, Nx = TT.shape
+        u_pred = u_pred.cpu().numpy().reshape(Nt, Nx)
+        u_ref  = u_ref.reshape(Nt, Nx)
+        abs_err = np.abs(u_ref - u_pred)
+
+        # ------------------------------------------------------------------
+        # 6. Plot
+        # ------------------------------------------------------------------
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5), constrained_layout=True)
+
+        titles = [f"Exact u(t,x) (c={c})", "Predicted u(t,x)", "Absolute error"]
+        data   = [u_ref, u_pred, abs_err]
+
+        for ax, z, title in zip(axes, data, titles):
+            pcm = ax.pcolormesh(t_star, x_star, z.T, cmap="jet", shading="auto")
+            fig.colorbar(pcm, ax=ax)
+            ax.set_xlabel("t")
+            ax.set_ylabel("x")
+            ax.set_title(title)
+
+        # ------------------------------------------------------------------
+        # 7. Save & close
+        # ------------------------------------------------------------------
+        fig_path = self.config["charts_folder_path"] / f"comparison_fulldomain_c_{c}.png"
+        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        # (optional) return the relative L2 error for logging
+        return float(l2_relative_error)
