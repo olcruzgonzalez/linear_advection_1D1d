@@ -71,6 +71,7 @@ train:
   batch_dfraction:  # Specific decimal fraction with respect to total data in boundary conditions {Inlet, Wall, Outlet}, initial condition and validation ds
     data: 1.0
     ic: 1.0
+    bc: 1.0
     val: 1.0
   data_extraction: 
      mode: 'random' # 'none', 'random'
@@ -123,7 +124,7 @@ lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
 
 loss_balancing:
   scheme: 'no_weights'
-  enabled: true
+  enabled: false
   
   # scheme: 'ntk_guided_weights'
   # enabled: true

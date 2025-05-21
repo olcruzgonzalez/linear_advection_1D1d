@@ -509,10 +509,13 @@ def random_data_extraction_deeponet(config, full_ds):
 
 # Training
 
-def build_stratum_dataset(stratumPrm, time_vector):
+def build_stratum_dataset(stratumPrm, time_vector, label):
     # Stratum 
     # Coordinates
-    coordinates = stratumPrm.coord_x
+    if label == 'BC':
+        coordinates = stratumPrm.coord_x[0,:,:][None,:]
+    else:
+        coordinates = stratumPrm.coord_x
     N_coord = coordinates.shape[0]
 
     X = coordinates[:,0,:]  # N_coord x N_timeSteps
@@ -523,7 +526,10 @@ def build_stratum_dataset(stratumPrm, time_vector):
     
 
     # Velocities
-    u = stratumPrm.u
+    if label == 'BC':
+        u = stratumPrm.u[0,:,:][None,:]
+    else:
+        u = stratumPrm.u
     U1 = u[:,0,:]
     v = U1.T.flatten()[:, None] 
     
@@ -531,21 +537,28 @@ def build_stratum_dataset(stratumPrm, time_vector):
 
 def craft_bc_and_ic_dataset(train_ds, time_vector):
     
+    # BC
+    xt_bc, u_bc = build_stratum_dataset(train_ds.BC, time_vector, label = 'BC')
     # PHY
-    xt_phy, u_phy = build_stratum_dataset(train_ds.PHY, time_vector)
+    xt_phy, u_phy = build_stratum_dataset(train_ds.PHY, time_vector, label = 'PHY')
     
     ## IC - PHY
     idx = np.where(xt_phy[:,1] == 0)
     xt_ic = xt_phy[idx]
     u_ic = u_phy[idx]
 
-    return xt_ic, u_ic
+    return xt_bc, u_bc, xt_ic, u_ic
 
 
 def craft_validation_dataset(val_ds, time_vector):
     
+    # BC
+    xt_bc, u_bc = build_stratum_dataset(val_ds.BC, time_vector, label = 'BC')
     # PHY
-    xt_star, u_ref = build_stratum_dataset(val_ds.PHY, time_vector)
+    xt_phy, u_phy = build_stratum_dataset(val_ds.PHY, time_vector, label = 'PHY')
+
+    xt_star = np.vstack((xt_bc,xt_phy))
+    u_ref = np.vstack((u_bc,u_phy))
 
     return xt_star, u_ref
 

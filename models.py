@@ -706,6 +706,30 @@ class Trainer_PIDeepONetLdata(nn.Module):
         self.runtime0 = self.config['tick_start']
         self.best_iter = 0
 
+    def loss_boundary_condition(self):
+
+        tau = []
+        for i, f_bc_tensor_i in enumerate(self.f_bc_tensor):
+            tau.append(self.model.branch_list[i](f_bc_tensor_i))
+ 
+        beta = self.model.trunk(self.xt_bc_tensor)
+
+        ## np.tile
+        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+
+        # Predicted
+        u_pred = torch.sum(tau[0] * beta, axis = 1)[:, None]
+       
+
+        # Ground Trust
+        u_GT = self.u_bc_tensor
+        
+        # Compute losses
+        u_loss = self.loss_fn(u_pred, u_GT)
+
+    
+        return u_loss, u_pred
+    
     def loss_data(self):
 
         tau = []
@@ -790,14 +814,17 @@ class Trainer_PIDeepONetLdata(nn.Module):
 
         # Forward pass and compute the losses per terms
         loss_ic, pred_ic = self.loss_initial_condition()
+        loss_bc, pred_bc = self.loss_boundary_condition()
         loss_data, pred_data = self.loss_data()
         loss_p, pred_phy = self.loss_physics()
 
         self.term_loss_tensor_dict['ic'] = loss_ic
+        self.term_loss_tensor_dict['bc'] = loss_bc
         self.term_loss_tensor_dict['data'] = loss_data
         self.term_loss_tensor_dict['phy'] = loss_p
 
         self.term_s_tensor_dict['ic'] = pred_ic
+        self.term_s_tensor_dict['bc'] = pred_bc
         self.term_s_tensor_dict['data'] = pred_data
         self.term_s_tensor_dict['phy'] = pred_phy
         
@@ -807,7 +834,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
         
     
         # Compute total loss
-        loss_total = self.term_lambdas_tensor_dict['ic'] * loss_ic + self.term_lambdas_tensor_dict['data'] * loss_data + self.term_lambdas_tensor_dict['phy'] * loss_p 
+        loss_total = self.term_lambdas_tensor_dict['ic'] * loss_ic + self.term_lambdas_tensor_dict['bc'] * loss_bc + self.term_lambdas_tensor_dict['data'] * loss_data + self.term_lambdas_tensor_dict['phy'] * loss_p 
 
 
         return loss_total
@@ -1081,6 +1108,9 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
         xt_ic = {} 
         u_ic = {} 
         
+        xt_bc = {} 
+        u_bc = {} 
+        
         xt_data = {} 
         u_data = {} 
         
@@ -1096,10 +1126,10 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
             # Fixed dataset
             #---------------------
             ## BOUNDARY CONDITIONS AND INITIAL CONDITION
-            xt_ic[chosen_flow_label], u_ic[chosen_flow_label]= craft_bc_and_ic_dataset(full_ds[chosen_flow_label], time_vector)
+            xt_bc[chosen_flow_label], u_bc[chosen_flow_label], xt_ic[chosen_flow_label], u_ic[chosen_flow_label]= craft_bc_and_ic_dataset(full_ds[chosen_flow_label], time_vector)
             
             ## DATA 
-            xt_data[chosen_flow_label], u_data[chosen_flow_label] = build_stratum_dataset(dataPrm[chosen_flow_label], time_vector)
+            xt_data[chosen_flow_label], u_data[chosen_flow_label] = build_stratum_dataset(dataPrm[chosen_flow_label], time_vector, label = 'DATA')
 
             ## VALIDATION DATASET
             xt_val[chosen_flow_label], u_val[chosen_flow_label] = craft_validation_dataset(val_ds[chosen_flow_label], time_vector)
@@ -1128,6 +1158,9 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
             # Trunk
             xt_ic_sample_all = []
             u_ic_target = []
+            
+            xt_bc_sample_all = []
+            u_bc_target = []
            
             xt_data_sample_all = []
             u_data_target = []
@@ -1142,6 +1175,9 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
             # IC 
             idx_ic = self.random_sampling(xt_ic[chosen_flow_label], u_ic[chosen_flow_label], label = 'ic')
             
+            # BC 
+            idx_bc = self.random_sampling(xt_bc[chosen_flow_label], u_bc[chosen_flow_label], label = 'bc')
+            
             # DATA 
             idx_data = self.random_sampling(xt_data[chosen_flow_label], u_data[chosen_flow_label], label = 'data')
 
@@ -1153,6 +1189,10 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
                 # IC 
                 xt_ic_sample =  xt_ic[chosen_flow_label][idx_ic]
                 u_ic_sample = u_ic[chosen_flow_label][idx_ic]
+                
+                # BC 
+                xt_bc_sample =  xt_bc[chosen_flow_label][idx_bc]
+                u_bc_sample = u_bc[chosen_flow_label][idx_bc]
                 
                 # DATA 
                 xt_data_sample =  xt_data[chosen_flow_label][idx_data]
@@ -1170,6 +1210,9 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
                 xt_ic_sample_all.append(xt_ic_sample)
                 u_ic_target.append(u_ic_sample)
                 
+                xt_bc_sample_all.append(xt_bc_sample)
+                u_bc_target.append(u_bc_sample)
+                
                 xt_data_sample_all.append(xt_data_sample)
                 u_data_target.append(u_data_sample)
 
@@ -1179,6 +1222,9 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
             # Trunk
             xt_ic_sample_all = np.array(xt_ic_sample_all)
             u_ic_target = np.array(u_ic_target)
+            
+            xt_bc_sample_all = np.array(xt_bc_sample_all)
+            u_bc_target = np.array(u_bc_target)
             
             xt_data_sample_all = np.array(xt_data_sample_all)
             u_data_target = np.array(u_data_target)
@@ -1207,6 +1253,23 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
                 self.f_ic_tensor.append(final_view)
             
             self.u_ic_tensor = torch.tensor(np.swapaxes(u_ic_target,0,1).reshape(-1,self.output_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+            
+            # BC
+            self.xt_bc_tensor = torch.tensor(np.swapaxes(xt_bc_sample_all,0,1).reshape(-1,self.trunk_in_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
+            
+            self.f_bc_tensor = []
+            num_samples = xt_bc_sample.shape[0]  
+            target_device = self.config['device']
+            
+            for key in branch_input.keys():
+                
+                base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]),dtype=torch.float32,device=target_device)
+                
+                final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+                
+                self.f_bc_tensor.append(final_view)
+            
+            self.u_bc_tensor = torch.tensor(np.swapaxes(u_bc_target,0,1).reshape(-1,self.output_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
             
             # DATA
             self.xt_data_tensor = torch.tensor(np.swapaxes(xt_data_sample_all,0,1).reshape(-1,self.trunk_in_dim), dtype = torch.float32, requires_grad= False).to(self.config['device'])
