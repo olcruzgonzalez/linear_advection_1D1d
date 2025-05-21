@@ -611,17 +611,21 @@ def build_dataloader(test_dataset, test_dataset_labels, batch_size):
 
 def build_stratified_dataset_based_on_data(ds, time_vector):
 
+    # BC
+    xt_bc, u_bc =  build_stratum_dataset(ds.BC, time_vector, 'BC')
     # PHY
-    xt_phy, u_phy =  build_stratum_dataset(ds.PHY, time_vector)
+    xt_phy, u_phy =  build_stratum_dataset(ds.PHY, time_vector, 'PHY')
     
 
+    bc_dataset = np.hstack(
+        (xt_bc, u_bc))
     phy_dataset = np.hstack(
         (xt_phy, u_phy))
     
-    stratified_dataset = phy_dataset
+    stratified_dataset = np.vstack((bc_dataset,phy_dataset))
 
 
-    stratified_dataset_labels = np.array(['PHY'] * phy_dataset.shape[0])
+    stratified_dataset_labels = np.array(['BC'] * bc_dataset.shape[0] + ['PHY'] * phy_dataset.shape[0])
 
 
     return stratified_dataset, stratified_dataset_labels

@@ -31,8 +31,11 @@ class NullContainer:
         return None
     
 
-def exact_solution(x, t, c):
-    return  np.sin(x)*np.cos(c*t) - np.sin(c*t)*np.cos(x)
+def u_close_form(x, t, c):
+    return np.where(x >= c*t,
+                    np.sin(np.pi * (x - c*t)),   # from initial line
+                    np.sin(np.pi/2 * (t - x/c)))   # from inflow boundary
+
 
 def activation_func(case):
 
@@ -2181,7 +2184,7 @@ class Tester(nn.Module):
         # Exact
         x_array = np.linspace(0, 1, 1000)[:,None]
         
-        u_exact = exact_solution(x_array, t, c)
+        u_exact = u_close_form(x_array, t, c)
         
         u_exact_tensor = torch.tensor(u_exact, dtype=torch.float32, requires_grad = False).to(self.config['device'])
 
