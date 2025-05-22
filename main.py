@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # Setting parameters from the command line
     parser = argparse.ArgumentParser(description="Execution Mode")
     parser.add_argument("--mode", type=str, default='train', help="Execution modes are 'train' or 'test'.")
-    parser.add_argument("--method", type=str, default='pi_deeponet_Ldata', help="Available methods are  'pi_deeponet_Ldata', 'pi_deeponet'.")
+    parser.add_argument("--method", type=str, default='modified_pi_deeponet_Ldata', help="Available methods are  'pi_deeponet_Ldata', 'pi_deeponet', 'modified_pi_deeponet_Ldata', 'modified_pi_deeponet'.")
     parser.add_argument("--run_ID", type=int, default=-1, help="The 'run_ID' is a unique identifier for the calculation.")
     parser.add_argument("--input_file_name", type=str, default='input.yaml', help="The input file contains the parameters necessary to launch the calculations. Here, we use YAML format.")
     parser.add_argument("--relative_path", type=str, default='./input.yaml', help="This is the relative path to the YAML input file. Only applies when run_ID == -1.")

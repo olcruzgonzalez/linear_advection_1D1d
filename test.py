@@ -12,7 +12,7 @@ from collections import namedtuple
 
 
 # Local modules
-from models import NeuralNetwork, Tester
+from models import NeuralNetwork, modified_NeuralNetwork, Tester, modified_Tester
 from utils import convert_to_json, get_subset_ds_deeponet, create_dataset_for_test, build_stratum_dataset
 
 
@@ -21,7 +21,10 @@ def testing_call(config):
 
     # Recreate the model instance
     config['logger'].info("Recreate the model instance")
-    model = NeuralNetwork(config = config)
+    if config['method'] == 'modified_pi_deeponet_Ldata' or config['method'] == 'modified_pi_deeponet':
+        model = modified_NeuralNetwork(config = config)
+    else:
+        model = NeuralNetwork(config = config)
     
     # Recover the best model - Load weights
     config['logger'].info("Load model weights")
@@ -31,9 +34,10 @@ def testing_call(config):
 
     # Recover the best model - Update weights
     config['logger'].info("Update model weights")
-    for i, key in enumerate(config['branches_control']['branch_list_ID']):
-        model.branch_list[i].load_state_dict(weights[f'{key}_state_dict'])
-    model.trunk.load_state_dict(weights['trunk_state_dict'])
+    # for i, key in enumerate(config['branches_control']['branch_list_ID']):
+    #     model.branch_list[i].load_state_dict(weights[f'{key}_state_dict'])
+    # model.trunk.load_state_dict(weights['trunk_state_dict'])
+    model.mdona.load_state_dict(weights['state_dict'])
 
     model.to(config['device'])
 
@@ -57,7 +61,10 @@ def testing_call(config):
         
         print("### Testing ... ###")
         config['logger'].info("### Testing ...")
-        tester = Tester(config, model)
+        if config['method'] == 'modified_pi_deeponet_Ldata' or config['method'] == 'modified_pi_deeponet':
+            tester = modified_Tester(config, model)
+        else:
+            tester = Tester(config, model)
         
         # Testing
         # ID = config['dataset']['chosen_flow_label']

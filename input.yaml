@@ -36,7 +36,7 @@ pde_param:
 
 branch1:
   neuralNet:
-    architecture : "Modified MLP"  # "Mlp" or "Modified MLP"
+    architecture : "Modified Deeponet"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
     in_dim : 256  # 'm_input_sensors' 
     num_layers : 3
     hidden_dim : 50
@@ -51,10 +51,10 @@ branches_control:
 
 trunk:
   neuralNet:
-    architecture : "Modified MLP"  # "Mlp" or "Modified MLP"
+    architecture : "Modified Deeponet"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
     in_dim : 2
     num_layers : 3
-    hidden_dim : 100
+    hidden_dim : 50
     out_dim : 128 
     activation : "tanh" # "swish", "tanh", "gelu"
     xavier_init : true
