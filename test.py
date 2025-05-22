@@ -53,7 +53,7 @@ def testing_call(config):
                 branch_input.update({key:[]})
         
         
-        branch_input[config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([config['test']['test_param'][idx]]),90)[None,:])
+        branch_input[config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([config['test']['test_param'][idx]]),config['branch1']['neuralNet']['in_dim'])[None,:])
         
         print("### Testing ... ###")
         config['logger'].info("### Testing ...")

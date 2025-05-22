@@ -612,6 +612,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
             self.writer = SummaryWriter(log_dir=config['logs_folder_path'])
 
         self.model = model
+        self.branch_in_dim = config['branch1']['neuralNet']['in_dim']
         self.branch_out_dim = config['branch1']['neuralNet']['out_dim']
         self.trunk_in_dim = config['trunk']['neuralNet']['in_dim']
         self.output_dim = 1
@@ -1206,7 +1207,7 @@ f"""- {key}_lambdas: {self.term_lambdas_tensor_dict[key].item()}\n"""
                 u_val_sample = u_val[chosen_flow_label][idx_val]
 
                 # Branch
-                branch_input[self.config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([self.c_dict[chosen_flow_label]]),90)[None,:])
+                branch_input[self.config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([self.c_dict[chosen_flow_label]]),self.branch_in_dim)[None,:])
 
 
                 ## Trunk
@@ -1951,7 +1952,7 @@ f"""- No GPU detected \n"""
                 u_val_sample = u_val[chosen_flow_label][idx_val]
 
                 # Branch
-                branch_input[self.config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([self.c_dict[chosen_flow_label]]),90)[None,:])
+                branch_input[self.config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([self.c_dict[chosen_flow_label]]),self.branch_in_dim)[None,:])
 
 
                 ## Trunk
@@ -2105,9 +2106,10 @@ class Tester(nn.Module):
         self.config = config
         self.model = model
 
-        # TODO
-        # PDE parameters
-        # self.R = self.config['pde_param']['R'] 
+        self.branch_in_dim = self.config['branch1']['neuralNet']['in_dim']
+        self.branch_out_dim = self.config['branch1']['neuralNet']['out_dim']
+        
+
         
     def test_full(self, dataloader, N_batches, branch_input, subset = 'test', param_label = None):
 
@@ -2152,7 +2154,7 @@ class Tester(nn.Module):
                 beta = self.model.trunk(inputs)
 
                 ## np.tile
-                tau[0] = tau[0].reshape(-1, 50)
+                tau[0] = tau[0].reshape(-1, self.branch_out_dim)
 
                 # Predicted
                 u_pred = torch.sum(tau[0] * beta, axis = 1)[:, None]
@@ -2195,7 +2197,7 @@ class Tester(nn.Module):
 
         xt_tensor = torch.tensor(xt_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
         f_a_i = c
-        f_a_array = np.repeat(np.array([f_a_i]),90)[None,:]
+        f_a_array = np.repeat(np.array([f_a_i]),self.branch_in_dim)[None,:]
         f_a_array = np.repeat(f_a_array, x_array.shape[0], axis = 0)
         f_a_tensor = torch.tensor(f_a_array, dtype=torch.float32, requires_grad = False).to(self.config['device'])
         
@@ -2295,7 +2297,7 @@ class Tester(nn.Module):
         with torch.no_grad():
             tau = [self.model.branch_list[i](f_tensor_i) for i, f_tensor_i in enumerate(f_tensor)]
             beta = self.model.trunk(xt)      # <<<<<<<< uses xt
-            tau[0] = tau[0].view(-1, 50)
+            tau[0] = tau[0].view(-1, self.branch_out_dim)
             u_pred = (tau[0] * beta).sum(dim=1, keepdim=True)
         # ------------------------------------------------------------------
         # 4. Error metrics

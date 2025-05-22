@@ -19,8 +19,8 @@ dataset:
   train_fraction: 0.68
   # val_fraction: 0.02
   test_fraction: 0.3 
-  varying_param: [0.5,0.875,1.25,1.625,2.0,0.56,0.67,0.93,1.12,1.5,1.73,1.95] # parameter c
-  varying_param_label: ['C05','C0875','C125','C1625','C20','C056','C067','C093','C112','C15','C173','C195'] # folder_ID
+  varying_param: [0.5,0.56,0.67,0.875,0.93,1.12,1.25,1.5,1.625,1.73,1.95,2.0] # parameter c
+  varying_param_label: ['C05','C056','C067','C0875','C093','C112','C125','C15','C1625','C173','C195','C20'] # folder_ID
   strata_labels: ['PHY','BC']
   state_vector_labels: ['coord_x','u'] 
   N_samples_per_stratum: {'N_coll': 10000}
@@ -36,11 +36,11 @@ pde_param:
 
 branch1:
   neuralNet:
-    architecture : "MLP"  # "Mlp" or "Modified MLP"
-    in_dim : 90  # 'm_input_sensors' 
+    architecture : "Modified MLP"  # "Mlp" or "Modified MLP"
+    in_dim : 256  # 'm_input_sensors' 
     num_layers : 3
-    hidden_dim : 75
-    out_dim : 50 
+    hidden_dim : 50
+    out_dim : 128 
     activation : "tanh" # "swish", "tanh", "gelu"
     xavier_init : true
 
@@ -51,19 +51,19 @@ branches_control:
 
 trunk:
   neuralNet:
-    architecture : "MLP"  # "Mlp" or "Modified MLP"
+    architecture : "Modified MLP"  # "Mlp" or "Modified MLP"
     in_dim : 2
     num_layers : 3
-    hidden_dim : 50
-    out_dim : 50 
+    hidden_dim : 100
+    out_dim : 128 
     activation : "tanh" # "swish", "tanh", "gelu"
     xavier_init : true
 
   
 train: 
-  n_training_param: 5
-  training_param: [0.5,0.875,1.25,1.625,2.0] # parameter c
-  training_param_label: ['C05','C0875','C125','C1625','C20']
+  n_training_param: 9
+  training_param: [0.5,0.67,0.875,0.93,1.12,1.5,1.625,1.73,2.0] # parameter c
+  training_param_label: ['C05','C067','C0875','C093','C112','C15','C1625','C173','C20']
   adam_steps: 50000
   lbfgs_steps: 0
   stop_iter: -1 
@@ -79,8 +79,8 @@ train:
 
 test: 
   n_test_param: 12
-  test_param: [0.5,0.875,1.25,1.625,2.0, 0.56,0.67,0.93,1.12,1.5,1.73,1.95] # parameter c
-  test_param_label: ['C05','C0875','C125','C1625','C20', 'C056','C067','C093','C112','C15','C173','C195']
+  test_param: [0.5,0.67,0.875,0.93,1.12,1.5,1.625,1.73,2.0, 0.56, 1.25, 1.95] # parameter c
+  test_param_label: ['C05','C067','C0875','C093','C112','C15','C1625','C173','C20', 'C056','C125','C195']
   batch_size: 10000
   t_values: [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
  
