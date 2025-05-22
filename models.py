@@ -2205,7 +2205,6 @@ class Trainer_PIDeepONet_modified(torch.nn.Module):
         self.best_iter = 0
         self.model.mdona(self.f_uc0_tensor, self.xyz_uc0_tensor, 'mat1')
     
-  
     def loss_boundary_condition(self):
 
         tau = []
@@ -2937,8 +2936,7 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
         self.min_error_for_checkpoint = np.Infinity
         self.runtime0 = self.config['tick_start']
         self.best_iter = 0
-    
-  
+     
     def loss_boundary_condition(self):
 
         # tau = []
@@ -3644,300 +3642,252 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
     
 class modified_Tester(torch.nn.Module):
 
-    def __init__(self, config, model, model0 = []):
-
+    def __init__(self, config, model):
+        
         super().__init__()
-
+        
         self.config = config
         self.model = model
-        self.model0 = model0
 
-        self.mu_mat1 = self.config['multi_level-1']['mu_mat1']
-        self.mu_mat2 = self.config['multi_level-1']['mu_mat2']
-        
-            
-    def test(self, dataloader, N_batches, y_I, subset = 'test'):
+        self.branch_in_dim = self.config['branch1']['neuralNet']['in_dim']
+        self.branch_out_dim = self.config['branch1']['neuralNet']['out_dim']
+         
+    def test_full(self, dataloader, N_batches, branch_input, subset = 'test', param_label = None):
 
-        print("### TESTING ... ###")
-        history_log = f"""LOG TEST - {subset}_dataset\n"""
+        history_log = f"""LOG TEST ON {param_label} - {subset}_dataset\n"""
        
-        l2_relative_error_chi = []
-        # l2_relative_error_pressure = []
-
-        # Periodic cell
-        periodic_cell=torch.tensor([[0], [y_I], [1]]).to(self.config['device'])
-
+        l2_relative_error_u = []
+        
         dataloader_iterator = iter(dataloader)
         custom_bar = trange(N_batches)
 
+        f_tensor = []
+        num_samples = self.config['test']['batch_size']
+        target_device = self.config['device']
+
+        for key in branch_input.keys():
+                
+            base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]),dtype=torch.float32,device=target_device)
+                
+            final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+                
+            f_tensor.append(final_view)
+
+       
         for batch_iter in custom_bar:
 
             batch, batch_labels = next(dataloader_iterator)
 
-            batch = batch.float().to(self.config['device'])
-
-            inputs, indices = torch.sort(batch[:, 0])
+            inputs = batch[:, 0:2].float().to(self.config['device'])
+            outputs = batch[:, 2:3].float().to(self.config['device'])
+            
             # REFERENCE
-            chi_ref = batch[:, 1:2][indices]
-            
-          
-            # First constituent 
-            lb = periodic_cell[0]
-            ub = periodic_cell[1]
-
-            coord_y_mat1 = inputs[(lb <= inputs) & (inputs < ub)][:,np.newaxis]
-
-            f_mat1_array = np.repeat(np.tile(y_I, (1,self.config['branch']['neuralNet']['in_dim'])), coord_y_mat1.shape[0], axis=0)
-            f_mat1_tensor=torch.tensor(f_mat1_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-
-            # PREDICTED
-            with torch.no_grad():
-                # # Mat1
-                # tau1 = self.branch(f_mat1_tensor)
-                # beta1 = self.trunk_list[0](coord_y_mat1)
-
-                # # Predicted
-                # chi_pred_mat1 = torch.sum(tau1 * beta1, axis = 1)[:, None]
-
-                chi_pred_mat1 = self.model.mdona(f_mat1_tensor, coord_y_mat1, 'mat1')
-        
-        
-            # Second constituent 
-            lb = periodic_cell[1]
-            ub = periodic_cell[2]
-                
-            coord_y_mat2= inputs[(lb<= inputs) & (inputs<= ub)][:,np.newaxis]
-
-            f_mat2_array = np.repeat(np.tile(y_I, (1,self.config['branch']['neuralNet']['in_dim'])), coord_y_mat2.shape[0], axis=0)
-            f_mat2_tensor=torch.tensor(f_mat2_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-            
-            # PREDICTED
-            with torch.no_grad():
-                # # Mat2
-                # tau2 = self.branch(f_mat2_tensor)
-                # beta2 = self.trunk_list[1](coord_y_mat2)
-
-                # # Predicted
-                # chi_pred_mat2 = torch.sum(tau2 * beta2, axis = 1)[:, None]
-                chi_pred_mat2 = self.model.mdona(f_mat2_tensor, coord_y_mat2, 'mat2')
-        
-    
-
-            chi_pred = torch.vstack((chi_pred_mat1, chi_pred_mat2))
-            l2_relative_error_chi.append(metric_l2_relative_error(exact = chi_ref, pred = chi_pred).cpu().numpy())
+            u_ref = outputs
            
 
+            # PREDICTED
+            with torch.no_grad():
+                
+                # tau = []
+                # for i, f_tensor_i in enumerate(f_tensor):
+                #     tau.append(self.model.branch_list[i](f_tensor_i))
+        
+                # beta = self.model.trunk(inputs)
+
+                # ## np.tile
+                # tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+
+                # # Predicted
+                # u_pred = torch.sum(tau[0] * beta, axis = 1)[:, None]
+
+                u_pred = self.model.mdona(f_tensor[0], inputs)
+
+
+            l2_relative_error_u.append(metric_l2_relative_error(exact = u_ref, pred = u_pred).cpu().numpy())
+
+            
             # Save into a .txt file
             history_log = history_log + \
             "\n-------------------------\n" + \
-            f"""Batch: {(batch_iter + 1)}/{(N_batches)} - 'l2_relative_error_vel': {l2_relative_error_chi[batch_iter]}\n"""
+            f"""Batch: {(batch_iter + 1)}/{(N_batches)} - 'l2_relative_error_vel': {l2_relative_error_u[batch_iter]} \n"""
+         
             
         # Save into a .txt file
         with open(self.config['test_progress_file_path'], 'a') as file:
             file.write(history_log + '\n\n\n')
 
-        self.config['logger'].info(f"Accuracy in Test - {subset}_dataset")
-        self.config['logger'].info(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_chi))}")
+        self.config['logger'].info(f"Accuracy in {param_label} - {subset}_dataset")
+        self.config['logger'].info(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
         
-        print(f"Accuracy in {subset}dataset")
-        print(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_chi))}")
+        print(f"Accuracy in {param_label} - {subset}dataset")
+        print(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
 
-    def visualize_absolute_error(self, ds, y_I, subset = 'full', label='VF01'):
-        
-        # Ground Trust
-        uc0Prm = ds.uc0Prm
-        mat1Prm = ds.mat1Prm
-        interfacePrm = ds.interfacePrm
-        mat2Prm = ds.mat2Prm
-        uc1Prm = ds.uc1Prm
-
-        # Periodic cell
-        periodic_cell=torch.tensor([[0], [y_I], [1]]).to(self.config['device'])
-
-        # REFERENCE
-        coordinates_plot = np.vstack([uc0Prm.coordinates[0], mat1Prm.coordinates, interfacePrm.coordinates[0], mat2Prm.coordinates, uc1Prm.coordinates[0]])
-        chi_ref = np.vstack([uc0Prm.chi[0], mat1Prm.chi, interfacePrm.chi[0], mat2Prm.chi, uc1Prm.chi[0]])
-
-        
-        coordinates = torch.tensor(coordinates_plot, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-        
-        # PREDICTED
-        # First constituent 
-        lb = periodic_cell[0]
-        ub = periodic_cell[1]
-
-        coord_y_mat1 = coordinates[(lb <= coordinates) & (coordinates < ub)][:,np.newaxis]
-
-        f_mat1_array = np.repeat(np.tile(y_I, (1,self.config['branch']['neuralNet']['in_dim'])), coord_y_mat1.shape[0], axis=0)
-        f_mat1_tensor=torch.tensor(f_mat1_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
+    def test_value(self, t, c):
         
 
-        # PREDICTED
+        # Exact
+        x_array = np.linspace(0, 1, 1000)[:,None]
+        
+        u_exact = u_close_form(x_array, t, c)
+        
+        u_exact_tensor = torch.tensor(u_exact, dtype=torch.float32, requires_grad = False).to(self.config['device'])
+
+    
+        # N = 1, P = batch_size
+        t_array = np.repeat(np.array([t]), x_array.shape[0], axis=0)[:,None]
+
+        xt_array = np.hstack([x_array, t_array])
+
+        xt_tensor = torch.tensor(xt_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
+        f_a_i = c
+        f_a_array = np.repeat(np.array([f_a_i]),self.branch_in_dim)[None,:]
+        f_a_array = np.repeat(f_a_array, x_array.shape[0], axis = 0)
+        f_a_tensor = torch.tensor(f_a_array, dtype=torch.float32, requires_grad = False).to(self.config['device'])
+        
+        
+
         with torch.no_grad():
-            # # Mat1
-            # tau1 = self.branch(f_mat1_tensor)
-            # beta1 = self.trunk_list[0](coord_y_mat1)
+        #     tau = self.model.branch_list[0](f_a_tensor)
+        #     beta = self.model.trunk(xt_tensor)
+        # u_pred_tensor = torch.sum(beta * tau, axis = 1)[:,None]
+            u_pred_tensor = self.model.mdona(f_a_tensor, xt_tensor)
 
-            # # Predicted
-            # chi_pred_mat1 = torch.sum(tau1 * beta1, axis = 1)[:, None]
-            chi_pred_mat1 = self.model.mdona(f_mat1_tensor, coord_y_mat1, 'mat1')
-        chi_mat1_pred = chi_pred_mat1.cpu().numpy()
         
-        # Second constituent 
-        lb = periodic_cell[1]
-        ub = periodic_cell[2]
+        l2_relative_error = torch.linalg.norm((u_exact_tensor-u_pred_tensor), 2)/torch.linalg.norm(u_exact_tensor, 2)
+        print(f'l2_relative_error={l2_relative_error.item()} for t = {t} and c = {f_a_i}')
+
+        u_pred = u_pred_tensor.cpu().numpy()
+        
+
+        return x_array, u_exact, u_pred, l2_relative_error.item()
+    
+    def visualize_comparison_per_value(self, t_all, f_a_i, x_final, u_exact_final, u_pred_final):
+       
+
+        fig, ax = plt.subplots(figsize=(5, 5))
+
+        # Create a color gradient for lines and points
+        line_colors_exact = plt.cm.Blues(np.linspace(0.5, 1, len(t_all)))
+        line_colors_pred = plt.cm.Reds(np.linspace(0.5, 1, len(t_all)))
+        point_colors = plt.cm.Greens(np.linspace(0.5, 1, len(t_all)))
+
+        for i,value in enumerate(t_all):
             
-        coord_y_mat2= coordinates[(lb<= coordinates) & (coordinates<= ub)][:,np.newaxis]
-        
-        f_mat2_array = np.repeat(np.tile(y_I, (1,self.config['branch']['neuralNet']['in_dim'])), coord_y_mat2.shape[0], axis=0)
-        f_mat2_tensor=torch.tensor(f_mat2_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-        
-        # PREDICTED
-        with torch.no_grad():
-            # # Mat2
-            # tau2 = self.branch(f_mat2_tensor)
-            # beta2 = self.trunk_list[1](coord_y_mat2)
+            ax.plot(x_final[i], u_exact_final[i], color=line_colors_exact[i], linewidth=3, label=f't = {value} and c = {f_a_i}')
+            ax.plot(x_final[i], u_pred_final[i], '--',color=line_colors_pred[i], linewidth=3)
+           
 
-            # # Predicted
-            # chi_pred_mat2 = torch.sum(tau2 * beta2, axis = 1)[:, None]
-            chi_pred_mat2 = self.model.mdona(f_mat2_tensor, coord_y_mat2, 'mat2')
-        chi_mat2_pred = chi_pred_mat2.cpu().numpy()
+        # Setting up the plot
+        ax.set_xlabel('x',fontsize=18)
+        ax.set_ylabel('u',fontsize=18)
+        plt.xticks(fontsize=18)
+        plt.yticks(fontsize=18)
+        ax.set_xlim(0, 1)
+        # ax.set_ylim(0.8, 4)
+        ax.set_ylim(-0.5, 1.5)
+        # ax.set_ylim(0.4, 2.5)
+        ax.legend()
+        # ax.set_title('Exact Solution for Different a Values')
 
-        chi_pred = np.vstack((chi_mat1_pred, chi_mat2_pred))
-
-
-        # Plot
-        fig = plt.figure(figsize=(20, 6))
-        plt.subplot(1, 3, 1)
-        plt.plot(coordinates_plot, chi_ref, 'b.')
-        plt.xlabel("y",fontsize=20)
-        plt.ylabel("chi",fontsize=20)
-        plt.title(f"Reference",fontsize=20)
-        plt.tight_layout()
-
-        plt.subplot(1, 3, 2)
-        plt.plot(coordinates_plot, chi_pred, 'r.')
-        plt.xlabel("y",fontsize=20)
-        plt.ylabel("chi",fontsize=20)
-        plt.title(f"Predicted",fontsize=20)
-        plt.tight_layout()
-
-        abs_error = abs(chi_ref- chi_pred)
-        plt.subplot(1, 3, 3)
-        plt.plot(coordinates_plot, abs_error)
-        plt.xlabel("y",fontsize=20)
-        plt.title(f"Absolute error",fontsize=20)
-        plt.tight_layout()
+        # plt.show()
 
         # Save the figure
-        fig_path = self.config['charts_folder_path'].joinpath(f'chi_absolute_error_{label}.png')
+        fig_path = self.config['charts_folder_path'].joinpath(f'comparison_exact_vs_predicted_c_{f_a_i}.png')
         fig.savefig(fig_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
-        
     
-
-        self.config['logger'].info("#-----------------------------------------#")
-        self.config['logger'].info(f"Accuracy in  {subset}_dataset")
-        
-        self.config['logger'].info(f"max absolute error in magnitude of vel: {np.max(abs_error)}")
-        self.config['logger'].info(f"min absolute error in magnitude of vel: {np.min(abs_error)}")
-        self.config['logger'].info(f"mean absolute error in magnitude of vel: {np.mean(abs_error)}")
-        
-        print("#-----------------------------------------#")
-        print(f"Accuracy in {subset}_dataset")
-        
-        print(f"max absolute error in magnitude of vel: {np.max(abs_error)}")
-        print(f"min absolute error in magnitude of vel: {np.min(abs_error)}")
-        print(f"mean absolute error in magnitude of vel: {np.mean(abs_error)}")
- 
-    def effective_properties(self, ds, y_I, subset = 'full'):
-        
-         # Ground Trust
-        uc0Prm = ds.uc0Prm
-        mat1Prm = ds.mat1Prm
-        interfacePrm = ds.interfacePrm
-        mat2Prm = ds.mat2Prm
-        uc1Prm = ds.uc1Prm
-
-        # Periodic cell
-        periodic_cell=torch.tensor([[0], [y_I], [1]]).to(self.config['device'])
-
-        # REFERENCE
-        coordinates_plot = np.vstack([uc0Prm.coordinates[0], mat1Prm.coordinates, interfacePrm.coordinates[0], mat2Prm.coordinates, uc1Prm.coordinates[0]])
-        chi_ref = np.vstack([uc0Prm.chi[0], mat1Prm.chi, interfacePrm.chi[0], mat2Prm.chi, uc1Prm.chi[0]])
-
-        
-        coordinates = torch.tensor(coordinates_plot, dtype = torch.float32, requires_grad= True).to(self.config['device'])
-        
-        # PREDICTED
-        # First constituent 
-        lb = periodic_cell[0]
-        ub = periodic_cell[1]
-
-        coord_y_mat1 = coordinates[(lb <= coordinates) & (coordinates < ub)][:,np.newaxis]
-
-        f_mat1_array = np.repeat(np.tile(y_I, (1,self.config['branch']['neuralNet']['in_dim'])), coord_y_mat1.shape[0], axis=0)
-        f_mat1_tensor=torch.tensor(f_mat1_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-        
-
-        # PREDICTED
-        # # Mat1
-        # tau1 = self.branch(f_mat1_tensor)
-        # beta1 = self.trunk_list[0](coord_y_mat1)
-
-        # # Predicted
-        # chi_mat1_pred = torch.sum(tau1 * beta1, axis = 1)[:, None]
-        chi_mat1_pred = self.model.mdona(f_mat1_tensor, coord_y_mat1, 'mat1')
-
-        # chi_mat1_pred = chi_mat1_pred.cpu().numpy()
-        chi_mat1_pred_y = torch.autograd.grad(chi_mat1_pred, coord_y_mat1, grad_outputs=torch.ones_like(chi_mat1_pred), create_graph=True)[0]
-        
-        # Second constituent 
-        lb = periodic_cell[1]
-        ub = periodic_cell[2]
+    def visualize_comparison_fulldomain(self, branch_input, c):
             
-        coord_y_mat2= coordinates[(lb<= coordinates) & (coordinates<= ub)][:,np.newaxis]
-        
-        f_mat2_array = np.repeat(np.tile(y_I, (1,self.config['branch']['neuralNet']['in_dim'])), coord_y_mat2.shape[0], axis=0)
-        f_mat2_tensor=torch.tensor(f_mat2_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-        
-        # PREDICTED
-        # # Mat2
-        # tau2 = self.branch(f_mat2_tensor)
-        # beta2 = self.trunk_list[1](coord_y_mat2)
+        # ------------------------------------------------------------------
+        # 1. Create a *regular space-time grid* with a single, unambiguous rule:
+        #    - first axis  →  time  (Nt points)
+        #    - second axis →  space (Nx points)
+        # ------------------------------------------------------------------
+        t_star = np.linspace(0.0, 1.0, 100)      # Nt
+        x_star = np.linspace(0.0, 1.0, 1000)     # Nx
 
-        # # Predicted
-        # chi_mat2_pred = torch.sum(tau2 * beta2, axis = 1)[:, None]
-        chi_mat2_pred = self.model.mdona(f_mat2_tensor, coord_y_mat2, 'mat2')
-        
-        # chi_mat2_pred = chi_mat2_pred.cpu().numpy()
-        chi_mat2_pred_y = torch.autograd.grad(chi_mat2_pred, coord_y_mat2, grad_outputs=torch.ones_like(chi_mat2_pred), create_graph=True)[0]
+        TT, XX = np.meshgrid(t_star, x_star, indexing="ij")  # TT,XX ∈ ℝ[Nt,Nx]
 
+        t_flat = TT.reshape(-1, 1)               # ℝ[Nt·Nx,1]
+        x_flat = XX.reshape(-1, 1)
 
-        Exp_mat1 = self.config['pde_param']['C1'] + self.config['pde_param']['C1']*chi_mat1_pred_y
-        Exp_mat2 = self.config['pde_param']['C2'] + self.config['pde_param']['C2']*chi_mat2_pred_y
+        # ------------------------------------------------------------------
+        # 2. Exact solution on the same grid
+        # ------------------------------------------------------------------
+        u_ref = u_close_form(x_flat, t_flat, c)  # expects (x,t,c)
 
+        # ------------------------------------------------------------------
+        # 3. Convert to torch & push through the network  (xt order)
+        # ------------------------------------------------------------------
+        device = self.config["device"]
 
-        # chi_pred = np.vstack((chi_mat1_pred, chi_mat2_pred))
+        t = torch.as_tensor(t_flat, dtype=torch.float32, device=device)
+        x = torch.as_tensor(x_flat, dtype=torch.float32, device=device)
 
-        # Via_1
-        # Perform the integration using the trapezoidal rule
-        integral_Exp1 = torch.trapezoid(Exp_mat1, coord_y_mat1, dim=0)
-        integral_Exp2 = torch.trapezoid(Exp_mat2, coord_y_mat2, dim=0)
-        # Sum the integrals
-        C_eff = integral_Exp1 + integral_Exp2
-        
-        # # Via_2 (If constant value !)
-        # R_eff_aux = torch.sum(y_I*Exp_mat1 + (1-y_I)*Exp_mat2)/Exp_mat1.shape[0]
+        # >>> trunk expects (x , t)  <<<  so concatenate in that order
+        xt = torch.cat([x, t], dim=1)        # shape: (N, 2)
 
-        # # assert(R_eff[0] == R_eff_aux)
-    
-        C_eff_pred=C_eff.detach().cpu().numpy()
+        # == Branch inputs (unchanged) =====================================
+        f_tensor = []
+        num_samples = xt.shape[0]
+        for i, key in enumerate(branch_input.keys()):
+            base = torch.as_tensor(np.vstack(branch_input[key]),
+                                dtype=torch.float32,
+                                device=device)
+            f_tensor.append(base.unsqueeze(0).expand(num_samples, -1, -1))
 
-        C_eff_ref=self.config['pde_param']['C1']*self.config['pde_param']['C2']/(y_I*self.config['pde_param']['C2']+(1-y_I)*self.config['pde_param']['C1'])
+        # == PINN prediction ===============================================
+        with torch.no_grad():
+            # tau = [self.model.branch_list[i](f_tensor_i) for i, f_tensor_i in enumerate(f_tensor)]
+            # beta = self.model.trunk(xt)      # <<<<<<<< uses xt
+            # tau[0] = tau[0].view(-1, self.branch_out_dim)
+            # u_pred = (tau[0] * beta).sum(dim=1, keepdim=True)
 
-        return C_eff_ref, C_eff_pred[0]
+            u_pred = self.model.mdona(f_tensor[0], xt)
+        # ------------------------------------------------------------------
+        # 4. Error metrics
+        # ------------------------------------------------------------------
+        l2_relative_error = metric_l2_relative_error(
+            exact=torch.as_tensor(u_ref, device=device, dtype=torch.float32),
+            pred=u_pred
+        )
+
+        self.config['logger'].info(f'l2_relative_error={l2_relative_error} for c = {c}')
+        print(f'l2_relative_error={l2_relative_error} for c = {c}')
+
+        # ------------------------------------------------------------------
+        # 5. Reshape back to (Nt,Nx) – NO transposes, the axes are correct
+        # ------------------------------------------------------------------
+        Nt, Nx = TT.shape
+        u_pred = u_pred.cpu().numpy().reshape(Nt, Nx)
+        u_ref  = u_ref.reshape(Nt, Nx)
+        abs_err = np.abs(u_ref - u_pred)
+
+        # ------------------------------------------------------------------
+        # 6. Plot
+        # ------------------------------------------------------------------
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5), constrained_layout=True)
+
+        titles = [f"Exact u(t,x) (c={c})", "Predicted u(t,x)", "Absolute error"]
+        data   = [u_ref, u_pred, abs_err]
+
+        for ax, z, title in zip(axes, data, titles):
+            pcm = ax.pcolormesh(t_star, x_star, z.T, cmap="jet", shading="auto")
+            fig.colorbar(pcm, ax=ax)
+            ax.set_xlabel("t")
+            ax.set_ylabel("x")
+            ax.set_title(title)
+
+        # ------------------------------------------------------------------
+        # 7. Save & close
+        # ------------------------------------------------------------------
+        fig_path = self.config["charts_folder_path"] / f"comparison_fulldomain_c_{c}.png"
+        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        # (optional) return the relative L2 error for logging
+        return float(l2_relative_error)
+
 
             
 class Tester(nn.Module):
@@ -3951,9 +3901,7 @@ class Tester(nn.Module):
 
         self.branch_in_dim = self.config['branch1']['neuralNet']['in_dim']
         self.branch_out_dim = self.config['branch1']['neuralNet']['out_dim']
-        
-
-        
+            
     def test_full(self, dataloader, N_batches, branch_input, subset = 'test', param_label = None):
 
         history_log = f"""LOG TEST ON {param_label} - {subset}_dataset\n"""
@@ -4094,8 +4042,7 @@ class Tester(nn.Module):
         fig_path = self.config['charts_folder_path'].joinpath(f'comparison_exact_vs_predicted_c_{f_a_i}.png')
         fig.savefig(fig_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
-    
-     
+      
     def visualize_comparison_fulldomain(self, branch_input, c):
             
         # ------------------------------------------------------------------
