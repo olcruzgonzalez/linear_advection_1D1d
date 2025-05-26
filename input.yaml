@@ -7,10 +7,10 @@ project:
     Non-Dimensionalization: true
     Adaptive sampling with in the Mesh: true
     Exponential decay: true 
-    Grad Norm: false 
-    Fourier embedding: false 
-    Modified MLP: true 
-    RWF: false
+    Modified Deeponet: true
+    Loss Balancing: true (fixed_weights)
+    Modified MLP: false 
+   
 
 dataset:
   path: '.dataset'
@@ -37,7 +37,7 @@ pde_param:
 branch1:
   neuralNet:
     architecture : "Modified Deeponet"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
-    in_dim : 256  # 'm_input_sensors' 
+    in_dim : 1  # 'm_input_sensors' 
     num_layers : 3
     hidden_dim : 50
     out_dim : 128 
@@ -120,40 +120,35 @@ random_weight_fact:  # Random Weight Factorization
 
 
 loss_terms: ["phy","bc", "ic", "data"]
-lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
+lambda_weights_init: [1.0, 100.0, 100.0, 100.0]
 
 loss_balancing:
-  scheme: 'no_weights'
-  enabled: false
+  scheme: 'fixed_weights'
+  enabled: true
+  update_step: 500
   
-  # scheme: 'ntk_guided_weights'
+  # scheme: 'no_weights'
   # enabled: true
-  # type: 'moderate_local_NTK_weights' # 'global_NTK_weights', 'local_NTK_weights', 'moderate_local_NTK_weights'
   # update_step: 500
+# lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
   
   
   # enabled: true
   # scheme: 'data_guided_weights'
   # update_step: 1000
 
+  # scheme: 'ntk_guided_weights'
+  # enabled: true
+  # type: 'moderate_local_NTK_weights' # 'global_NTK_weights', 'local_NTK_weights', 'moderate_local_NTK_weights'
+  # update_step: 500
+
+
 # loss_balancing:  # Grad Norm - Self adaptive learning rate annealing algorithm 
   # enabled: false
   # scheme: "grad_norm"
   # momentum: 0.9
   # update_step: 1000
-
-# scheme: 'no_weights'
   
-# scheme: 'fixed_guided_weights'
-# lambda_weights_init: [10.0, 1.0, 1.0]
-  
- # scheme: 'ntk_guided_weights'
-  # type: 'local_NTK_weights' # 'global_NTK_weights', 'local_NTK_weights', 'moderate_local_NTK_weights'
-  # loss_terms: ["mat1","interface", "mat2"]
-  # lambda_weights_init: [1.0, 1.0, 1.0]
-  # update_step: 500
-
-
 
 logging: 
   log_every_steps : 500

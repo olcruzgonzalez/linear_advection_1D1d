@@ -2910,11 +2910,14 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
         self.term_lambdas_tensor_dict = {key: self.term_lambdas_tensor[i] for i,key in enumerate(self.config['loss_terms'])}
 
          # Branch and Trunks
-        self.K = {key:[] for key in self.config['loss_terms']}
-        if self.has_loss_balancing and self.config['loss_balancing']['scheme'] == 'ntk_guided_weights':
-            self.config['logger'].info(f"Using NTK guided weights")              
-            self.loss_balancing_log = """Loss Balancing - NTK guided weights\n"""
-        
+        scheme = self.config['loss_balancing']['scheme']
+        if self.has_loss_balancing and scheme == 'ntk_guided_weights':
+            
+            self.K = {key:[] for key in self.config['loss_terms']}
+
+            self.config['logger'].info(f"Using {scheme} for loss balancing.")
+            self.loss_balancing_log = f"Loss Balancing - {scheme}\n"
+
             self.term_grad_dict = {}
             for net in ['branch1', 'trunk']:
                 self.term_grad_dict[net] = {}
