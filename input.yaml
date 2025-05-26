@@ -8,7 +8,7 @@ project:
     Adaptive sampling with in the Mesh: true
     Exponential decay: true 
     Modified Deeponet: true
-    Loss Balancing: true (fixed_weights)
+    Loss Balancing: true (data_guided_weights)
     Modified MLP: false 
    
 
@@ -120,22 +120,23 @@ random_weight_fact:  # Random Weight Factorization
 
 
 loss_terms: ["phy","bc", "ic", "data"]
-lambda_weights_init: [1.0, 100.0, 100.0, 100.0]
+lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
 
 loss_balancing:
-  scheme: 'fixed_weights'
+  scheme: 'data_guided_weights'
   enabled: true
-  update_step: 500
+  update_step: 1000
   
   # scheme: 'no_weights'
   # enabled: true
   # update_step: 500
 # lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
   
+#   scheme: 'fixed_weights'
+#   enabled: true
+#   update_step: 500
+# lambda_weights_init: [1.0, 100.0, 100.0, 100.0]
   
-  # enabled: true
-  # scheme: 'data_guided_weights'
-  # update_step: 1000
 
   # scheme: 'ntk_guided_weights'
   # enabled: true

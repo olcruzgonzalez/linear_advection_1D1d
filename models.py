@@ -5,6 +5,7 @@ import copy
 
 from functools import reduce
 import numpy as np
+from typing import Sequence
 
 import torch
 import torch.nn as nn
@@ -2877,6 +2878,7 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
                     return factor
 
                 self.scheduler_Adam = torch.optim.lr_scheduler.LambdaLR(self.optimizer_Adam, lr_lambda_func)
+       
         if config['optim2']['optimizer'] == 'LBFGS':
 
             # # Extract parameters from custom parameter groups
@@ -2918,21 +2920,21 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
             self.config['logger'].info(f"Using {scheme} for loss balancing.")
             self.loss_balancing_log = f"Loss Balancing - {scheme}\n"
 
-            self.term_grad_dict = {}
-            for net in ['branch1', 'trunk']:
-                self.term_grad_dict[net] = {}
-                for key in self.config['loss_terms']:
-                    self.term_grad_dict[net][key] = {}
-                    for n in range(config[net]['neuralNet']['num_layers'] + 1):
-                        self.term_grad_dict[net][key][f'standard_dense_layer{2*n}'] = {'weight': [], 'bias': []}
+            # self.term_grad_dict = {}
+            # for net in ['branch1', 'trunk']:
+            #     self.term_grad_dict[net] = {}
+            #     for key in self.config['loss_terms']:
+            #         self.term_grad_dict[net][key] = {}
+            #         for n in range(config[net]['neuralNet']['num_layers'] + 1):
+            #             self.term_grad_dict[net][key][f'standard_dense_layer{2*n}'] = {'weight': [], 'bias': []}
             
-            self.global_hat_lambdas = {key:[] for key in self.config['loss_terms']}
+            # self.global_hat_lambdas = {key:[] for key in self.config['loss_terms']}
 
-            for net in ['branch1', 'trunk']:
-                if self.config[net]["neuralNet"]["architecture"] == "Modified MLP":
-                    for key in self.config['loss_terms']:
-                        self.term_grad_dict[net][key].update({f'encoder_dense1_layer{0}' : {'weight': [], 'bias': []}})
-                        self.term_grad_dict[net][key].update({f'encoder_dense2_layer{0}' : {'weight': [], 'bias': []}})
+            # for net in ['branch1', 'trunk']:
+            #     if self.config[net]["neuralNet"]["architecture"] == "Modified MLP":
+            #         for key in self.config['loss_terms']:
+            #             self.term_grad_dict[net][key].update({f'encoder_dense1_layer{0}' : {'weight': [], 'bias': []}})
+            #             self.term_grad_dict[net][key].update({f'encoder_dense2_layer{0}' : {'weight': [], 'bias': []}})
 
 
         self.log_log = """LOG\n"""
@@ -3120,107 +3122,113 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
                 self.term_lambdas_tensor[idx] = 1/max_val.detach()
 
         elif self.config['loss_balancing']['scheme'] == 'ntk_guided_weights':
-            
-            for key in self.config['loss_terms']:
-                self.term_loss_tensor_dict[key].backward(retain_graph=True)
-
-                all_param_grads_branch = self.loss_balancing_save_grads(self.model.branch_list[0], self.term_grad_dict['branch1'][key], 'branch1')
-                all_param_grads_trunk = self.loss_balancing_save_grads(self.model.trunk, self.term_grad_dict['trunk'][key], 'trunk')
                 
-                all_param_grads = np.hstack([all_param_grads_branch, all_param_grads_trunk])
+            #     for key in self.config['loss_terms']:
+            #         self.term_loss_tensor_dict[key].backward(retain_graph=True)
+
+            #         all_param_grads_branch = self.loss_balancing_save_grads(self.model.branch_list[0], self.term_grad_dict['branch1'][key], 'branch1')
+            #         all_param_grads_trunk = self.loss_balancing_save_grads(self.model.trunk, self.term_grad_dict['trunk'][key], 'trunk')
+                    
+            #         all_param_grads = np.hstack([all_param_grads_branch, all_param_grads_trunk])
+                    
+            #         # # Paper 1 NTK: Wang et al. 2022 Improved Architecture and ...
+                    
+            #         self.K[key] =  np.dot(all_param_grads,all_param_grads)
+
+
+            #         self.optimizer_Adam.zero_grad() #### UPDATE HERE FOR THE OPTIMIZER
+
                 
-                # # Paper 1 NTK: Wang et al. 2022 Improved Architecture and ...
+            #    # # Paper 1 NTK: Wang et al. 2022 Improved Architecture and ...
+            #    # Combine into one tensor
+            #     K = torch.tensor(list(self.K.values()))
+
+            #     if self.config['loss_balancing']['type'] == 'global_NTK_weights':
+            #         K_sum = K.sum()
                 
-                self.K[key] =  np.dot(all_param_grads,all_param_grads)
+            #         new_lambs = torch.tensor([K_sum / self.K[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
 
+            #     elif self.config['loss_balancing']['type'] == 'local_NTK_weights':
+            #         K_max = K.max()
+                    
+            #         new_lambs = torch.tensor([K_max / self.K[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
 
-                self.optimizer_Adam.zero_grad() #### UPDATE HERE FOR THE OPTIMIZER
+            #     elif self.config['loss_balancing']['type'] == 'moderate_local_NTK_weights':
+            #         K_max = K.max()
 
-            
-           # # Paper 1 NTK: Wang et al. 2022 Improved Architecture and ...
-           # Combine into one tensor
-            K = torch.tensor(list(self.K.values()))
+            #         new_lambs = torch.tensor([ torch.sqrt(K_max / self.K[key]) for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
 
-            if self.config['loss_balancing']['type'] == 'global_NTK_weights':
-                K_sum = K.sum()
-            
-                new_lambs = torch.tensor([K_sum / self.K[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
+            #     # update lambdas
+            #     self.term_lambdas_tensor = new_lambs
 
-            elif self.config['loss_balancing']['type'] == 'local_NTK_weights':
-                K_max = K.max()
-                
-                new_lambs = torch.tensor([K_max / self.K[key] for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
+            # 0. grab *exactly* the parameters used by the optimiser -------------
+            all_params = [
+                p for group in self.model.mdona.param_groups for p in group["params"]
+            ]  
 
-            elif self.config['loss_balancing']['type'] == 'moderate_local_NTK_weights':
-                K_max = K.max()
+            # 1. gather losses --------------------------------------------------
+            losses = [self.term_loss_tensor_dict[k] for k in self.config["loss_terms"]]
 
-                new_lambs = torch.tensor([ torch.sqrt(K_max / self.K[key]) for key in self.config['loss_terms']], dtype=torch.float32, requires_grad=False).to(self.config['device'])
+            # 2a. build gradient matrix  (n_terms × n_params) ------------------
+            grad_mat = torch.stack([
+                self.flat_grad(loss, all_params).detach()
+                for loss in losses
+            ]) #                ↑ detach: NTK weights should not be back-proped
 
-            # update lambdas
-            self.term_lambdas_tensor = new_lambs
+            # 2b. NTK diagonal --------------------------------------------------
+            k_diag = self.ntk_diag_from_grads(grad_mat)     # shape (n_terms,)
+
+            # 3. λ update -------------------------------------------------------
+            lambdas = self.normalise_ntk(
+                k_diag,                                # stays on-device
+                self.config["loss_balancing"]["type"]
+            ).to(self.config["device"])
+
+            # 4. # update lambdas -----------------------------------------
+            self.term_lambdas_tensor = lambdas
         
         else:
             pass
     
-    def loss_balancing_save_grads(self, net, term_grad_dict_key, net_ID):
+   
+    def normalise_ntk(self, k_vec: torch.Tensor, mode: str) -> torch.Tensor:
+        """
+        Vectorised λ update:   λ_k = (‖H‖_∞ / H_kk)^α   with α ∈ {1,½}.
+        """
+        if mode == "global_NTK_weights":      # α = 1, global sum variant
+            return k_vec.sum() / k_vec
+        if mode == "local_NTK_weights":       # α = 1, max variant
+            return k_vec.max() / k_vec
+        if mode == "moderate_local_NTK_weights":  # α = ½
+            return torch.sqrt(k_vec.max() / k_vec)
 
-        all_param_grads = np.array([])
-
-        for i,key in enumerate(term_grad_dict_key.keys()):
-            
-            if i <= self.config[net_ID]['neuralNet']['num_layers']:
-                # Standard Dense 
-                if net.standard_dense.net[2*i].weight.grad is None:
-                    print(f'\n Weights -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    weight_grad = net.standard_dense.net[2*i].weight.grad.cpu().numpy()
-                    term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
-
-
-                if net.standard_dense.net[2*i].bias.grad is None:
-                    print(f'\n Bias -> SKIP LAYER - standard dense {2*i}')
-                else:
-                    bias_grad = net.standard_dense.net[2*i].bias.grad.cpu().numpy()
-                    term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                    all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-            else:
-
-                if key == 'encoder_dense1_layer0':
-                    # Encoder Dense (Modified MLP)
-                    if net.encoder_dense1.net[0].weight.grad is None:
-                        print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        weight_grad = net.encoder_dense1.net[0].weight.grad.cpu().numpy()
-                        term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
+        raise ValueError(f"Unknown NTK scheme: {mode}")
 
 
-                    if net.encoder_dense1.net[0].bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = net.encoder_dense1.net[0].bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-               
-                else: # 'encoder_dense2_layer0'
-                   # Encoder Dense (Modified MLP)
-                    if net.encoder_dense2.net[0].weight.grad is None:
-                        print(f'\n Weights -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        weight_grad = net.encoder_dense2.net[0].weight.grad.cpu().numpy()
-                        term_grad_dict_key[key]['weight'] = weight_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['weight']))
+    def flat_grad(self, loss: torch.Tensor,
+                params: Sequence[torch.nn.Parameter]) -> torch.Tensor:
+        """
+        Return a 1-D tensor containing ∂loss/∂θ for *all* parameters,
+        inserting zeros where autograd returns None.
+        """
+        grads = torch.autograd.grad(
+            loss, params,
+            retain_graph=True, create_graph=False, allow_unused=True
+        )
+        vec = [
+            (g if g is not None else torch.zeros_like(p)).flatten()
+            for g, p in zip(grads, params)
+        ]
+        return torch.cat(vec)                      # shape: (n_params,)
 
 
-                    if net.encoder_dense2.net[0].bias.grad is None:
-                        print(f'\n Bias -> SKIP LAYER - encoder dense 1 {0}')
-                    else:
-                        bias_grad = net.encoder_dense2.net[0].bias.grad.cpu().numpy()
-                        term_grad_dict_key[key]['bias'] = bias_grad.reshape(-1)
-                        all_param_grads = np.concatenate((all_param_grads,term_grad_dict_key[key]['bias']))
-
-        return all_param_grads
+    def ntk_diag_from_grads(self, grad_mat: torch.Tensor) -> torch.Tensor:
+        """
+        Given the gradient matrix of shape (n_terms, n_params),
+        return the vector of NTK diagonal entries.
+        """
+        return (grad_mat ** 2).sum(dim=1)          # row-wise ‖·‖₂²
+    
     
     def logger_call(self):
 
