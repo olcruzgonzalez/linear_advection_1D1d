@@ -56,8 +56,12 @@ def testing_call(config):
         for key in config['branches_control']['branch_input_ID']:
                 branch_input.update({key:[]})
         
-        
-        branch_input[config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([config['test']['test_param'][idx]]),config['branch1']['neuralNet']['in_dim'])[None,:])
+        # BC
+        _, u_bc =  build_stratum_dataset(full_ds.BC, timePrm.time_vector[:,None], label = 'BC')
+
+        branch_input[config['branches_control']['branch_input_ID'][0]].append(
+            u_bc.T
+            )
         
         print("### Testing ... ###")
         config['logger'].info("### Testing ...")
@@ -88,21 +92,21 @@ def testing_call(config):
        
         for t_i in config['test']['t_values']:
 
-            c = config['test']['test_param'][idx]
+            k_i = config['test']['test_param'][idx]
             config['logger'].info(f"TESTING ON {ID} - value {t_i}")
-            x_array, u_exact, u_pred, l2_relative_error = tester.test_value(t_i, c)
+            x_array, u_exact, u_pred, l2_relative_error = tester.test_value(k_i, t_i, branch_input, label = ID)
             
-            config['logger'].info(f'l2_relative_error={l2_relative_error} for t = {t_i} and c = {c}')
+            config['logger'].info(f'l2_relative_error={l2_relative_error} for t = {t_i} and {ID}')
             
             x_array_final.append(x_array)
             u_exact_final.append(u_exact)
             u_pred_final.append(u_pred)
             
         
-        tester.visualize_comparison_per_value(config['test']['t_values'], c, x_array_final, u_exact_final, u_pred_final)
+        tester.visualize_comparison_per_value(config['test']['t_values'], ID, x_array_final, u_exact_final, u_pred_final, label = ID)
         
         print("### Visualize comparison full domain ###")
-        tester.visualize_comparison_fulldomain(branch_input, c)
+        tester.visualize_comparison_fulldomain(branch_input, k_i, ID)
         
         
 

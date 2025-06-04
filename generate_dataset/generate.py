@@ -46,7 +46,7 @@ def generate_call(config):
                 if stratum == 'PHY':
                     governing_equation(cwd, L, c, varying_param[i], varying_param_label[i], stratum, N_coll, t_i)
                 elif stratum == 'BC':
-                    boundary_condition(cwd, varying_param_label[i], stratum, t_i)
+                    boundary_condition(cwd, varying_param[i], varying_param_label[i], stratum, t_i)
 
     print("### Dataset successfully generated!")
         

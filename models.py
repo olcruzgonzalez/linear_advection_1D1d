@@ -32,10 +32,11 @@ class NullContainer:
         return None
     
 
-def u_close_form(x, t, c):
+def u_close_form(x, t, c, k):
     return np.where(x >= c*t,
-                    np.sin(np.pi * (x - c*t)),   # from initial line
-                    np.sin(np.pi/2 * (t - x/c)))   # from inflow boundary
+                    np.sin(np.pi * (x - c*t)),   # from initial condition line
+                    np.sin(k*np.pi/2 * (t - x/c))) + k*np.pi/2 * (t - x/c)  # from inflow boundary condition
+
 
 
 def activation_func(case):
@@ -2847,8 +2848,7 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
         self.trunk_in_dim = config['trunk']['neuralNet']['in_dim']
         self.output_dim = 1
 
-        # PDE parameters
-        self.c_dict = self.config['pde_param']['c']
+        self.c = config['dataset']['c']   
 
         # Optimizers
         if config['optim1']['optimizer'] == 'Adam':
@@ -3046,7 +3046,7 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
             u, self.t_phy, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
 
-        EQ1 = u_t + self.c_tensor *  u_x 
+        EQ1 = u_t + self.c *  u_x 
        
 
         # Compute losses
@@ -3371,7 +3371,6 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
         xt_val = {} 
         u_val = {}
       
-        c_list = []
 
         for chosen_flow_label in self.config['train']['training_param_label']:
 
@@ -3388,26 +3387,48 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
             ## VALIDATION DATASET
             xt_val[chosen_flow_label], u_val[chosen_flow_label] = craft_validation_dataset(val_ds[chosen_flow_label], time_vector)
 
-            c_list.append(self.c_dict[chosen_flow_label])
 
         # """The coordinate points are the same between the different datasets, so we can choose a geometry among the options"""
         coordinates, time_min, time_max = get_coordinates_for_generator(full_ds[self.config['train']['training_param_label'][0]], time_vector)
 
-        # c parameter - For Loss PHY
-        c_array = np.tile(np.array(c_list), self.config['train']['batch_size_coll'])
-        self.c_tensor = torch.tensor(c_array[:,None], dtype = torch.float32, requires_grad= False).to(self.config['device'])
 
         # Workflow
         self.custom_bar = trange(self.last_iter + 1)
         
+         # Branch
+        branch_input = {}
+        for key in self.config['branches_control']['branch_input_ID']:
+            branch_input.update({key:[]})
+
+        ## Random Sampling - Get Fixed Indexes
+        # BC 
+        idx_bc_fixed = self.random_sampling(xt_bc[chosen_flow_label], u_bc[chosen_flow_label], label = 'bc')
+        
+        for chosen_flow_label in self.config['train']['training_param_label']:
+                
+            ## Random Sampling
+            # INLET 
+            # vel_bc_inlet_sample = processed_temporal_features_inlet[chosen_flow_label][None,:]   
+            u_bc_sample = u_bc[chosen_flow_label][idx_bc_fixed]    
+            
+            ## Branch
+            # for i in range(N_vel_branch_inlet):
+                # index = self.config['branches_control']['axis_indexes'][self.config['branches_control']['vel_axis_ID'][i]]
+                # branch_input[self.config['branches_control']['branch_input_ID'][i]].append(vel_bc_inlet_sample[:,index].T)
+            branch_input[self.config['branches_control']['branch_input_ID'][0]].append(u_bc_sample.T)
+            
+           
+         #------------------------------------
+        
+
         for regular_iter in self.custom_bar:
 
             self.regular_iter = regular_iter
 
-            # Branch
-            branch_input = {}
-            for key in self.config['branches_control']['branch_input_ID']:
-                branch_input.update({key:[]})
+            # # Branch
+            # branch_input = {}
+            # for key in self.config['branches_control']['branch_input_ID']:
+            #     branch_input.update({key:[]})
 
             # Trunk
             xt_ic_sample_all = []
@@ -3456,8 +3477,8 @@ class Trainer_PIDeepONetLdata_modified(torch.nn.Module):
                 xt_val_sample = xt_val[chosen_flow_label][idx_val]
                 u_val_sample = u_val[chosen_flow_label][idx_val]
 
-                # Branch
-                branch_input[self.config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([self.c_dict[chosen_flow_label]]),self.branch_in_dim)[None,:])
+                # # Branch
+                # branch_input[self.config['branches_control']['branch_input_ID'][0]].append(np.repeat(np.array([self.c_dict[chosen_flow_label]]),self.branch_in_dim)[None,:])
 
 
                 ## Trunk
@@ -3733,27 +3754,38 @@ class modified_Tester(torch.nn.Module):
         print(f"Accuracy in {param_label} - {subset}dataset")
         print(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
 
-    def test_value(self, t, c):
+    def test_value(self, k_i, t_i, branch_input, label = 'InflowBC_K056'):
         
-
+        c = 1
         # Exact
         x_array = np.linspace(0, 1, 1000)[:,None]
         
-        u_exact = u_close_form(x_array, t, c)
+        u_exact = u_close_form(x_array, t_i, c, k_i)
         
         u_exact_tensor = torch.tensor(u_exact, dtype=torch.float32, requires_grad = False).to(self.config['device'])
 
     
         # N = 1, P = batch_size
-        t_array = np.repeat(np.array([t]), x_array.shape[0], axis=0)[:,None]
+        t_array = np.repeat(np.array([t_i]), x_array.shape[0], axis=0)[:,None]
 
         xt_array = np.hstack([x_array, t_array])
 
         xt_tensor = torch.tensor(xt_array, dtype = torch.float32, requires_grad= False).to(self.config['device'])
-        f_a_i = c
-        f_a_array = np.repeat(np.array([f_a_i]),self.branch_in_dim)[None,:]
-        f_a_array = np.repeat(f_a_array, x_array.shape[0], axis = 0)
-        f_a_tensor = torch.tensor(f_a_array, dtype=torch.float32, requires_grad = False).to(self.config['device'])
+        
+        
+        f_tensor = []
+        num_samples = xt_tensor.shape[0]
+        target_device = self.config['device']
+
+        for key in branch_input.keys():
+                
+            base_tensor_dev = torch.as_tensor(np.vstack(branch_input[key]),dtype=torch.float32,device=target_device)
+                
+            final_view = base_tensor_dev.contiguous().unsqueeze(0).expand(num_samples, -1, -1) 
+                
+            f_tensor.append(final_view)
+        
+        
         
         
 
@@ -3761,18 +3793,18 @@ class modified_Tester(torch.nn.Module):
         #     tau = self.model.branch_list[0](f_a_tensor)
         #     beta = self.model.trunk(xt_tensor)
         # u_pred_tensor = torch.sum(beta * tau, axis = 1)[:,None]
-            u_pred_tensor = self.model.mdona(f_a_tensor, xt_tensor)
+            u_pred_tensor = self.model.mdona(f_tensor[0], xt_tensor)
 
         
         l2_relative_error = torch.linalg.norm((u_exact_tensor-u_pred_tensor), 2)/torch.linalg.norm(u_exact_tensor, 2)
-        print(f'l2_relative_error={l2_relative_error.item()} for t = {t} and c = {f_a_i}')
+        print(f'l2_relative_error={l2_relative_error.item()} for t = {t_i} and {label}')
 
         u_pred = u_pred_tensor.cpu().numpy()
         
 
         return x_array, u_exact, u_pred, l2_relative_error.item()
     
-    def visualize_comparison_per_value(self, t_all, f_a_i, x_final, u_exact_final, u_pred_final):
+    def visualize_comparison_per_value(self, t_all, f_a_i, x_final, u_exact_final, u_pred_final, label = 'InflowBC_K056'):
        
 
         fig, ax = plt.subplots(figsize=(5, 5))
@@ -3803,12 +3835,13 @@ class modified_Tester(torch.nn.Module):
         # plt.show()
 
         # Save the figure
-        fig_path = self.config['charts_folder_path'].joinpath(f'comparison_exact_vs_predicted_c_{f_a_i}.png')
+        fig_path = self.config['charts_folder_path'].joinpath(f'comparison_exact_vs_predicted_{label}.png')
         fig.savefig(fig_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
     
-    def visualize_comparison_fulldomain(self, branch_input, c):
-            
+    def visualize_comparison_fulldomain(self, branch_input, k_i, label):
+        
+        c = 1
         # ------------------------------------------------------------------
         # 1. Create a *regular space-time grid* with a single, unambiguous rule:
         #    - first axis  →  time  (Nt points)
@@ -3825,7 +3858,7 @@ class modified_Tester(torch.nn.Module):
         # ------------------------------------------------------------------
         # 2. Exact solution on the same grid
         # ------------------------------------------------------------------
-        u_ref = u_close_form(x_flat, t_flat, c)  # expects (x,t,c)
+        u_ref = u_close_form(x_flat, t_flat, c, k_i)  # expects (x,t,c)
 
         # ------------------------------------------------------------------
         # 3. Convert to torch & push through the network  (xt order)
@@ -3863,8 +3896,8 @@ class modified_Tester(torch.nn.Module):
             pred=u_pred
         )
 
-        self.config['logger'].info(f'l2_relative_error={l2_relative_error} for c = {c}')
-        print(f'l2_relative_error={l2_relative_error} for c = {c}')
+        self.config['logger'].info(f'l2_relative_error={l2_relative_error} for {label}')
+        print(f'l2_relative_error={l2_relative_error} for {label}')
 
         # ------------------------------------------------------------------
         # 5. Reshape back to (Nt,Nx) – NO transposes, the axes are correct
@@ -3879,7 +3912,7 @@ class modified_Tester(torch.nn.Module):
         # ------------------------------------------------------------------
         fig, axes = plt.subplots(1, 3, figsize=(18, 5), constrained_layout=True)
 
-        titles = [f"Exact u(t,x) (c={c})", "Predicted u(t,x)", "Absolute error"]
+        titles = [f"Exact u(t,x) ({label})", "Predicted u(t,x)", "Absolute error"]
         data   = [u_ref, u_pred, abs_err]
 
         for ax, z, title in zip(axes, data, titles):
@@ -3892,7 +3925,7 @@ class modified_Tester(torch.nn.Module):
         # ------------------------------------------------------------------
         # 7. Save & close
         # ------------------------------------------------------------------
-        fig_path = self.config["charts_folder_path"] / f"comparison_fulldomain_c_{c}.png"
+        fig_path = self.config["charts_folder_path"] / f"comparison_fulldomain_{label}.png"
         fig.savefig(fig_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
 

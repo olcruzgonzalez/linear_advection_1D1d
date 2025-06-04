@@ -466,9 +466,6 @@ def all_data_transformations_deeponet(config, subset):
         # Load data
         config['logger'].info(f"Loading dataset  - {subset}")
         timePrm, strata_data = load_data(config['data_path'], chosen_flow_label, config['dataset']['strata_labels'], subset)
-
-      
-        config['pde_param']['c'][chosen_flow_label] = config['train']['training_param'][idx]
         
         ds[chosen_flow_label] = Collection(**strata_data)
 

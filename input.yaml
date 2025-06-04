@@ -1,7 +1,7 @@
 # Input file
 
 project:
-  name: "Linear-Advection_1D1d"
+  name: "Linear-Advection_1D1d u(x,t), f(x,t)"
   status: "sota" 
   info-techniques: 
     Non-Dimensionalization: true
@@ -14,13 +14,13 @@ project:
 
 dataset:
   path: '.dataset'
-  generate: true # true or false
-  processing: true  # true or false
+  generate: false # true or false
+  processing: false  # true or false
   train_fraction: 0.68
   # val_fraction: 0.02
   test_fraction: 0.3 
   varying_param: [0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0,0.56,1.25,1.95] # parameter c
-  varying_param_label: ['C05','C06','C07','C08','C09','C10','C11','C12','C13','C14','C15','C16','C17','C18','C19','C20','C056','C125','C195'] # folder_ID
+  varying_param_label: ['InflowBC_K05','InflowBC_K06','InflowBC_K07','InflowBC_K08','InflowBC_K09','InflowBC_K10','InflowBC_K11','InflowBC_K12','InflowBC_K13','InflowBC_K14','InflowBC_K15','InflowBC_K16','InflowBC_K17','InflowBC_K18','InflowBC_K19','InflowBC_K20','InflowBC_K056','InflowBC_K125','InflowBC_K195'] # folder_ID
   strata_labels: ['PHY','BC']
   state_vector_labels: ['coord_x','u'] 
   N_samples_per_stratum: {'N_coll': 10000}
@@ -32,14 +32,14 @@ dataset:
   total_time: 1
  
 
-pde_param:
-  name: 'linear_advection'
-  k: {}
+# pde_param:
+#   name: 'linear_advection'
+#   k: {}
 
 branch1:
   neuralNet:
     architecture : "Modified Deeponet"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
-    in_dim : 1  # 'm_input_sensors' 
+    in_dim : 51  # 'm_input_sensors' (inflow condition u(0,t) per timestep)
     num_layers : 3
     hidden_dim : 50
     out_dim : 128 
@@ -48,7 +48,7 @@ branch1:
 
 branches_control:
   branch_list_ID: ['branch1']
-  branch_input_ID: ['k'] 
+  branch_input_ID: ['InflowBC_K'] 
   
 
 trunk:
@@ -65,7 +65,7 @@ trunk:
 train: 
   n_training_param: 16
   training_param: [0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0] # parameter k
-  training_param_label: ['C05','C06','C07','C08','C09','C10','C11','C12','C13','C14','C15','C16','C17','C18','C19','C20']
+  training_param_label: ['InflowBC_K05','InflowBC_K06','InflowBC_K07','InflowBC_K08','InflowBC_K09','InflowBC_K10','InflowBC_K11','InflowBC_K12','InflowBC_K13','InflowBC_K14','InflowBC_K15','InflowBC_K16','InflowBC_K17','InflowBC_K18','InflowBC_K19','InflowBC_K20']
   adam_steps: 50000
   lbfgs_steps: 0
   stop_iter: -1 
@@ -82,7 +82,7 @@ train:
 test: 
   n_test_param: 3
   test_param: [0.56,1.25,1.95] # parameter k
-  test_param_label: ['C056','C125','C195']
+  test_param_label: ['InflowBC_K056','InflowBC_K125','InflowBC_K195']
   batch_size: 10000
   t_values: [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
  

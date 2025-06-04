@@ -3,8 +3,8 @@ import numpy as np
 
 def u_close_form(x, t, c, k):
     return np.where(x >= c*t,
-                    np.sin(np.pi * (x - c*t)),   # from initial line
-                    np.sin(k*np.pi/2 * (t - x/c))) + k*np.pi/2 * (t - x/c)  # from inflow boundary
+                    np.sin(np.pi * (x - c*t)),   # from initial condition line
+                    np.sin(k*np.pi/2 * (t - x/c))) + k*np.pi/2 * (t - x/c)  # from inflow boundary condition
 
 def governing_equation(cwd, L, c, varying_param_i, varying_param_label_i, stratum, N_coll, t_i):
     
@@ -26,12 +26,13 @@ def governing_equation(cwd, L, c, varying_param_i, varying_param_label_i, stratu
             file.write(f"{i+1}\t{ds[i,0]:.6f}\t{ds[i,1]:.6f}\n")
 
 
-def boundary_condition(cwd, varying_param_label_i, stratum, t_i):
+def boundary_condition(cwd, varying_param_i, varying_param_label_i, stratum, t_i):
     
+    k_i = varying_param_i
     N_bc = 100
     # Boundary condition
     x = 0.0
-    u = np.sin(np.pi/2 * t_i )
+    u = np.sin(k_i*np.pi/2 * t_i ) + k_i*np.pi/2 * t_i
     
     ds = np.repeat(np.stack([[x,u]]), N_bc, axis=0)
     
