@@ -9,7 +9,9 @@ from generate_dataset.ground_trust import governing_equation, boundary_condition
 def generate_call(config):
     
     cwd = config['cwd']
-    varying_param = config['dataset']['varying_param']
+    L = config['dataset']['L']
+    c = config['dataset']['c']
+    varying_param = config['dataset']['varying_param'] # parameter k
     varying_param_label = config['dataset']['varying_param_label']
     strata_ID = config['dataset']['strata_labels']
     N_samples_per_stratum = config['dataset']['N_samples_per_stratum']
@@ -42,7 +44,7 @@ def generate_call(config):
             for t_i in time_vector:
               
                 if stratum == 'PHY':
-                    governing_equation(cwd, varying_param[i], varying_param_label[i], stratum, N_coll, t_i)
+                    governing_equation(cwd, L, c, varying_param[i], varying_param_label[i], stratum, N_coll, t_i)
                 elif stratum == 'BC':
                     boundary_condition(cwd, varying_param_label[i], stratum, t_i)
 

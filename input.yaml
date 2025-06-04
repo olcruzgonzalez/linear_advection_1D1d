@@ -1,4 +1,4 @@
-###  Input file
+# Input file
 
 project:
   name: "Linear-Advection_1D1d"
@@ -14,16 +14,18 @@ project:
 
 dataset:
   path: '.dataset'
-  generate: false # true or false
-  processing: false  # true or false
+  generate: true # true or false
+  processing: true  # true or false
   train_fraction: 0.68
   # val_fraction: 0.02
   test_fraction: 0.3 
-  varying_param: [0.5,0.56,0.67,0.875,0.93,1.12,1.25,1.5,1.625,1.73,1.95,2.0] # parameter c
-  varying_param_label: ['C05','C056','C067','C0875','C093','C112','C125','C15','C1625','C173','C195','C20'] # folder_ID
+  varying_param: [0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0,0.56,1.25,1.95] # parameter c
+  varying_param_label: ['C05','C06','C07','C08','C09','C10','C11','C12','C13','C14','C15','C16','C17','C18','C19','C20','C056','C125','C195'] # folder_ID
   strata_labels: ['PHY','BC']
   state_vector_labels: ['coord_x','u'] 
   N_samples_per_stratum: {'N_coll': 10000}
+  L: 1.0
+  c: 1.0
   initial_time: 0.0
   N_time_step: 51
   time_step: 0.02
@@ -32,7 +34,7 @@ dataset:
 
 pde_param:
   name: 'linear_advection'
-  c: {}
+  k: {}
 
 branch1:
   neuralNet:
@@ -46,7 +48,7 @@ branch1:
 
 branches_control:
   branch_list_ID: ['branch1']
-  branch_input_ID: ['c'] 
+  branch_input_ID: ['k'] 
   
 
 trunk:
@@ -61,9 +63,9 @@ trunk:
 
   
 train: 
-  n_training_param: 9
-  training_param: [0.5,0.67,0.875,0.93,1.12,1.5,1.625,1.73,2.0] # parameter c
-  training_param_label: ['C05','C067','C0875','C093','C112','C15','C1625','C173','C20']
+  n_training_param: 16
+  training_param: [0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0] # parameter k
+  training_param_label: ['C05','C06','C07','C08','C09','C10','C11','C12','C13','C14','C15','C16','C17','C18','C19','C20']
   adam_steps: 50000
   lbfgs_steps: 0
   stop_iter: -1 
@@ -78,9 +80,9 @@ train:
      decimal_fraction: 0.01 # mode: 'none', 'random'
 
 test: 
-  n_test_param: 12
-  test_param: [0.5,0.67,0.875,0.93,1.12,1.5,1.625,1.73,2.0, 0.56, 1.25, 1.95] # parameter c
-  test_param_label: ['C05','C067','C0875','C093','C112','C15','C1625','C173','C20', 'C056','C125','C195']
+  n_test_param: 3
+  test_param: [0.56,1.25,1.95] # parameter k
+  test_param_label: ['C056','C125','C195']
   batch_size: 10000
   t_values: [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
  
