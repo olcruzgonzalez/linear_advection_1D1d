@@ -4,12 +4,22 @@ project:
   name: "Linear-Advection_1D1d u(x,t), f(x,t)"
   status: "sota" 
   info-techniques: 
-    Non-Dimensionalization: true
-    Adaptive sampling with in the Mesh: true
-    Exponential decay: true 
-    Modified Deeponet: true
-    Loss Balancing: false
-    Modified MLP: false 
+    Group I:
+      Non-Dimensionalization: true
+      Adaptive sampling with in the Mesh: true
+      Activation_Tanh: true
+      Xavier_init: true
+      Exponential decay + Optimizer scheduler: false 
+      Loss Balancing: 
+        Scheme_no_weights: true
+        Scheme_fixed_weights: false
+        Scheme_data_guided_weights: false
+        Scheme_ntk_guided_weights: false
+      Arch:
+        MLP: true
+        Modified MLP:  false
+        Modified Deeponet: false
+      Increasing_Train_dataset: false
    
 
 dataset:
@@ -49,9 +59,8 @@ branch1:
 branches_control:
   branch_list_ID: ['branch1']
   branch_input_ID: ['InflowBC_K'] 
-  
 
-trunk:
+trunk1:
   neuralNet:
     architecture : "Modified Deeponet"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
     in_dim : 2
@@ -61,6 +70,10 @@ trunk:
     activation : "tanh" # "swish", "tanh", "gelu"
     xavier_init : true
 
+trunk_control:
+  trunk_list_ID: ['trunk1']
+  trunk_input_ID: ['xt'] 
+  
   
 train: 
   n_training_param: 6
@@ -115,12 +128,6 @@ fourier_emb:  # Fourier Features Embedding
   embed_dim: 128
 
 
-random_weight_fact:  # Random Weight Factorization
-  enabled: false
-  mean : 0.5 
-  stddev : 0.1
-
-
 loss_terms: ["phy","bc", "ic", "data"]
 lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
 
@@ -130,11 +137,7 @@ loss_balancing:
   
   # update_step: 500
 # lambda_weights_init: [1.0, 1.0, 1.0, 1.0]
-  # scheme: 'ntk_guided_weights'
-  # enabled: true
-  # type: 'moderate_local_NTK_weights' # 'global_NTK_weights', 'local_NTK_weights', 'moderate_local_NTK_weights'
-  # update_step: 500
-  
+ 
   # scheme: 'data_guided_weights'
   # enabled: true
   # update_step: 500
