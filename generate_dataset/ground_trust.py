@@ -4,7 +4,7 @@ import numpy as np
 def u_close_form(x, t, c, k):
     return np.where(x >= c*t,
                     np.sin(np.pi * (x - c*t)),   # from initial condition line
-                    np.sin(k*np.pi/2 * (t - x/c))) + k*np.pi/2 * (t - x/c)  # from inflow boundary condition
+                    np.sin(k*np.pi/2 * (t - x/c)) + k*np.pi/2 * (t - x/c))  # from inflow boundary condition
 
 def governing_equation(cwd, L, c, varying_param_i, varying_param_label_i, stratum, N_coll, t_i):
     

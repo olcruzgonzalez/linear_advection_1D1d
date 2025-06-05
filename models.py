@@ -24,6 +24,7 @@ plt.ioff()  # Turn interactive plotting off
 
 
 # Local modules
+from generate_dataset.ground_trust import u_close_form
 from utils import  get_cpu_memory_usage, get_cuda_memory_usage, plot_magnitude_and_save_absolute_error, craft_bc_and_ic_dataset, craft_validation_dataset, get_coordinates_for_generator,  from_time_to_index, build_stratum_dataset
 
 class NullContainer:
@@ -31,14 +32,6 @@ class NullContainer:
         # You can return a default value or even self to allow chaining.
         return None
     
-
-def u_close_form(x, t, c, k):
-    return np.where(x >= c*t,
-                    np.sin(np.pi * (x - c*t)),   # from initial condition line
-                    np.sin(k*np.pi/2 * (t - x/c))) + k*np.pi/2 * (t - x/c)  # from inflow boundary condition
-
-
-
 def activation_func(case):
 
     if case == 'swish':
