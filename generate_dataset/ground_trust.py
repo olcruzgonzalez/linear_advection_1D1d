@@ -1,15 +1,15 @@
 from pathlib import Path
 import numpy as np
 
-def f_ic(x,k):
-    return np.sin(np.pi * x)
+def u_0(x,k):
+    return np.sin(np.pi * x) + k*np.pi/2*x # from initial condition line
 
 def g_bc(t, k):
     return np.sin(k*np.pi/2 * t) + k*np.pi/2*t  # from inflow boundary condition
 
 def u_close_form(x, t, c, k):
     return np.where(x >= c*t,
-                    f_ic(x - c*t,k),   # from initial condition line
+                    u_0(x - c*t,k),   # from initial condition line
                     g_bc(t - x/c,k))  # from inflow boundary condition
 
 
