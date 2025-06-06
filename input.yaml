@@ -24,8 +24,8 @@ project:
 
 dataset:
   path: '.dataset'
-  generate: true # true or false
-  processing: true  # true or false
+  generate: false # true or false
+  processing: false  # true or false
   train_fraction: 0.68
   # val_fraction: 0.02
   test_fraction: 0.3 
@@ -48,7 +48,7 @@ dataset:
 
 branch1:
   neuralNet:
-    architecture : "Modified Deeponet"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
+    architecture : "MLP"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
     in_dim : 51  # 'm_input_sensors' (inflow condition u(0,t) per timestep)
     num_layers : 3
     hidden_dim : 50
@@ -62,7 +62,7 @@ branches_control:
 
 trunk1:
   neuralNet:
-    architecture : "Modified Deeponet"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
+    architecture : "MLP"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
     in_dim : 2
     num_layers : 3
     hidden_dim : 50
@@ -107,7 +107,7 @@ optim1:
   eps: 1.0e-8
   learning_rate: 1.0e-3
   exponential_decay:
-    enabled: true
+    enabled: false
     decay_rate: 0.95  
     decay_steps: 3000
 

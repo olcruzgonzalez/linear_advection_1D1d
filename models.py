@@ -596,7 +596,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
             u, self.t_phy, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
 
-        EQ1 = u_t + self.c_tensor *  u_x 
+        EQ1 = u_t + self.c *  u_x 
        
 
         # Compute losses
@@ -1344,7 +1344,7 @@ class Trainer_PIDeepONet(nn.Module):
             u, self.t_phy, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
 
-        EQ1 = u_t + self.c_tensor *  u_x 
+        EQ1 = u_t + self.c *  u_x 
        
 
         # Compute losses
@@ -1954,9 +1954,8 @@ class Tester(nn.Module):
         print(f"Accuracy in {param_label} - {subset}dataset")
         print(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
 
-    def test_value(self, k_i, t_i, branch_input, label = 'InflowBC_K056'):
+    def test_value(self, k_i, t_i, c, branch_input, label = 'InflowBC_K056'):
         
-        c = 1
         # Exact
         x_array = np.linspace(0, 1, 1000)[:,None]
         
@@ -1990,8 +1989,10 @@ class Tester(nn.Module):
         
 
         with torch.no_grad():
-            tau = self.model.branch_list[0](f_tensor)
+            tau = self.model.branch_list[0](f_tensor[0])
             beta = self.model.trunk_list[0](xt_tensor)
+            ## np.tile
+            tau = tau.reshape(-1, self.branch_out_dim)
         u_pred_tensor = torch.sum(beta * tau, axis = 1)[:,None]
             
 
@@ -2016,7 +2017,7 @@ class Tester(nn.Module):
 
         for i,value in enumerate(t_all):
             
-            ax.plot(x_final[i], u_exact_final[i], color=line_colors_exact[i], linewidth=3, label=f't = {value} and c = {f_a_i}')
+            ax.plot(x_final[i], u_exact_final[i], color=line_colors_exact[i], linewidth=3, label=f't = {value} and {f_a_i}')
             ax.plot(x_final[i], u_pred_final[i], '--',color=line_colors_pred[i], linewidth=3)
            
 
@@ -2039,9 +2040,9 @@ class Tester(nn.Module):
         fig.savefig(fig_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
       
-    def visualize_comparison_fulldomain(self, branch_input, k_i, label):
+    def visualize_comparison_fulldomain(self, branch_input, k_i, c, label):
         
-        c = 1
+
         # ------------------------------------------------------------------
         # 1. Create a *regular space-time grid* with a single, unambiguous rule:
         #    - first axis  →  time  (Nt points)
@@ -3542,9 +3543,9 @@ class modified_Tester(torch.nn.Module):
         print(f"Accuracy in {param_label} - {subset}dataset")
         print(f"L2 relative error in vel: {np.mean(np.array(l2_relative_error_u))}")
 
-    def test_value(self, k_i, t_i, branch_input, label = 'InflowBC_K056'):
+    def test_value(self, k_i, t_i, c, branch_input, label = 'InflowBC_K056'):
         
-        c = 1
+
         # Exact
         x_array = np.linspace(0, 1, 1000)[:,None]
         
@@ -3604,7 +3605,7 @@ class modified_Tester(torch.nn.Module):
 
         for i,value in enumerate(t_all):
             
-            ax.plot(x_final[i], u_exact_final[i], color=line_colors_exact[i], linewidth=3, label=f't = {value} and c = {f_a_i}')
+            ax.plot(x_final[i], u_exact_final[i], color=line_colors_exact[i], linewidth=3, label=f't = {value} and {f_a_i}')
             ax.plot(x_final[i], u_pred_final[i], '--',color=line_colors_pred[i], linewidth=3)
            
 
@@ -3627,9 +3628,9 @@ class modified_Tester(torch.nn.Module):
         fig.savefig(fig_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
     
-    def visualize_comparison_fulldomain(self, branch_input, k_i, label):
+    def visualize_comparison_fulldomain(self, branch_input, k_i, c, label):
         
-        c = 1
+
         # ------------------------------------------------------------------
         # 1. Create a *regular space-time grid* with a single, unambiguous rule:
         #    - first axis  →  time  (Nt points)

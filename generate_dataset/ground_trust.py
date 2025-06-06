@@ -1,10 +1,17 @@
 from pathlib import Path
 import numpy as np
 
+def f_ic(x,k):
+    return np.sin(np.pi * x)
+
+def g_bc(t, k):
+    return np.sin(k*np.pi/2 * t) + k*np.pi/2*t  # from inflow boundary condition
+
 def u_close_form(x, t, c, k):
     return np.where(x >= c*t,
-                    np.sin(np.pi * (x - c*t)),   # from initial condition line
-                    np.sin(k*np.pi/2 * (t - x/c)) + k*np.pi/2 * (t - x/c))  # from inflow boundary condition
+                    f_ic(x - c*t,k),   # from initial condition line
+                    g_bc(t - x/c,k))  # from inflow boundary condition
+
 
 def governing_equation(cwd, L, c, varying_param_i, varying_param_label_i, stratum, N_coll, t_i):
     
@@ -32,7 +39,7 @@ def boundary_condition(cwd, varying_param_i, varying_param_label_i, stratum, t_i
     N_bc = 100
     # Boundary condition
     x = 0.0
-    u = np.sin(k_i*np.pi/2 * t_i ) + k_i*np.pi/2 * t_i
+    u = g_bc(t_i, k_i)
     
     ds = np.repeat(np.stack([[x,u]]), N_bc, axis=0)
     

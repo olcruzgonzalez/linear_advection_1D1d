@@ -34,19 +34,22 @@ def testing_call(config):
 
     # Recover the best model - Update weights
     config['logger'].info("Update model weights")
-    # for i, key in enumerate(config['branches_control']['branch_list_ID']):
-    #     model.branch_list[i].load_state_dict(weights[f'{key}_state_dict'])
-    # model.trunk.load_state_dict(weights['trunk_state_dict'])
-    model.mdona.load_state_dict(weights['state_dict'])
+    if config['method'] == 'modified_pi_deeponet_Ldata' or config['method'] == 'modified_pi_deeponet':
+        model.mdona.load_state_dict(weights['state_dict'])
+    else:
+        for i, key in enumerate(config['branches_control']['branch_list_ID']):
+            model.branch_list[i].load_state_dict(weights[f'{key}_state_dict'])
+        for i, key in enumerate(config['trunk_control']['trunk_list_ID']):
+            model.trunk_list[i].load_state_dict(weights[f'{key}_state_dict'])
 
     model.to(config['device'])
+    c = config['dataset']['c']
 
     for idx, ID in enumerate(config['test']['test_param_label']):
 
         # Load data
         config['logger'].info("Loading dataset - full")
         timePrm, full_ds = get_subset_ds_deeponet(config, ID, 'full')
-        # timePrm, max_inlet_velocity, full_ds = get_subset_ds_deeponet(config, ID, 'temporaltest')
 
         config['logger'].info("Create dataset for test - dataloader")
         dataloader_full, N_batches_full = create_dataset_for_test(config, full_ds, timePrm)
@@ -70,8 +73,6 @@ def testing_call(config):
         else:
             tester = Tester(config, model)
         
-        # Testing
-        # ID = config['dataset']['chosen_flow_label']
         config['logger'].info("#-----------------------------------------#")
         config['logger'].info("#-----------------------------------------#")
         config['logger'].info(f"TESTING ON {ID} - 'full'")
@@ -79,13 +80,7 @@ def testing_call(config):
         config['logger'].info("#-----------------------------------------#")
         tester.test_full(dataloader_full, N_batches_full, branch_input, subset = 'full', param_label = ID)
         
-        config['logger'].info("#-----------------------------------------#")
-        config['logger'].info(f"TESTING ON {ID} - 'temporaltest'")
-        config['logger'].info("#-----------------------------------------#")
-        # tester.test(dataloader_temporaltest, N_batches_temporaltest, subset = 'temporaltest')
-
-        
-        
+    
         x_array_final = []
         u_exact_final = []
         u_pred_final = []
@@ -94,7 +89,7 @@ def testing_call(config):
 
             k_i = config['test']['test_param'][idx]
             config['logger'].info(f"TESTING ON {ID} - value {t_i}")
-            x_array, u_exact, u_pred, l2_relative_error = tester.test_value(k_i, t_i, branch_input, label = ID)
+            x_array, u_exact, u_pred, l2_relative_error = tester.test_value(k_i, t_i, c, branch_input, label = ID)
             
             config['logger'].info(f'l2_relative_error={l2_relative_error} for t = {t_i} and {ID}')
             
@@ -106,7 +101,7 @@ def testing_call(config):
         tester.visualize_comparison_per_value(config['test']['t_values'], ID, x_array_final, u_exact_final, u_pred_final, label = ID)
         
         print("### Visualize comparison full domain ###")
-        tester.visualize_comparison_fulldomain(branch_input, k_i, ID)
+        tester.visualize_comparison_fulldomain(branch_input, k_i, c, ID)
         
         
 
