@@ -45,6 +45,9 @@ def testing_call(config):
     model.to(config['device'])
     c = config['dataset']['c']
 
+    load_path_idx_ic = config['checkpoints_folder_path'].joinpath(f"idx_ic.npy")
+    idx_ic = np.load(load_path_idx_ic)
+
     for idx, ID in enumerate(config['test']['test_param_label']):
 
         # Load data
@@ -60,12 +63,21 @@ def testing_call(config):
                 branch_input.update({key:[]})
         
         # BC
-        _, u_bc =  build_stratum_dataset(full_ds.BC, timePrm.time_vector[:,None], label = 'BC')
-
-        branch_input[config['branches_control']['branch_input_ID'][0]].append(
-            u_bc.T
-            )
+        _, u_bc = build_stratum_dataset(full_ds.BC, timePrm.time_vector[:,None], label = 'BC')
+        # PHY
+        xt_phy, u_phy = build_stratum_dataset(full_ds.PHY, timePrm.time_vector[:,None], label = 'PHY')
         
+        ## IC - PHY
+        idx_aux = np.where(xt_phy[:,1] == 0)
+        # xt_ic = xt_phy[idx]
+        u_ic = u_phy[idx_aux]
+
+        # IC
+        u_ic_sample = u_ic[idx_ic]
+
+        branch_input[config['branches_control']['branch_input_ID'][0]].append(u_bc.T)
+        branch_input[config['branches_control']['branch_input_ID'][1]].append(u_ic_sample.T)
+
         print("### Testing ... ###")
         config['logger'].info("### Testing ...")
         if config['method'] == 'modified_pi_deeponet_Ldata' or config['method'] == 'modified_pi_deeponet':

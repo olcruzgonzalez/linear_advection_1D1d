@@ -407,8 +407,10 @@ class Trainer_PIDeepONetLdata(nn.Module):
             self.writer = SummaryWriter(log_dir=config['logs_folder_path'])
 
         self.model = model
-        self.branch_in_dim = config['branch1']['neuralNet']['in_dim']
-        self.branch_out_dim = config['branch1']['neuralNet']['out_dim']
+        self.branch1_in_dim = config['branch1']['neuralNet']['in_dim']
+        self.branch1_out_dim = config['branch1']['neuralNet']['out_dim']
+        self.branch2_in_dim = config['branch2']['neuralNet']['in_dim']
+        self.branch2_out_dim = config['branch2']['neuralNet']['out_dim']
         self.trunk_in_dim = config['trunk1']['neuralNet']['in_dim']
         self.output_dim = 1
 
@@ -504,10 +506,12 @@ class Trainer_PIDeepONetLdata(nn.Module):
             beta.append(self.model.trunk_list[i](xt_bc_tensor_i))
 
         ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
         # Predicted
-        u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
+        # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
        
 
         # Ground Trust
@@ -530,10 +534,12 @@ class Trainer_PIDeepONetLdata(nn.Module):
             beta.append(self.model.trunk_list[i](xt_data_tensor_i))
 
         ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
         # Predicted
-        u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
+        # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
        
 
         # Ground Trust
@@ -556,10 +562,12 @@ class Trainer_PIDeepONetLdata(nn.Module):
             beta.append(self.model.trunk_list[i](xt_ic_tensor_i))
 
         ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
         # Predicted
-        u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
+        # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
        
 
         # Ground Trust
@@ -582,11 +590,13 @@ class Trainer_PIDeepONetLdata(nn.Module):
         beta.append(self.model.trunk_list[0](torch.cat([self.x_phy, self.t_phy], 1)))
 
         ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+        tau[1] = tau[1].reshape(-1, self.branch1_out_dim)
 
         # Predicted
-        if len(self.config['branches_control']['branch_list_ID']) == 1:
-            u = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        u = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
+        # if len(self.config['branches_control']['branch_list_ID']) == 1:
+        #     u = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
 
         # Autodiff
         u_x = torch.autograd.grad(
@@ -800,12 +810,18 @@ class Trainer_PIDeepONetLdata(nn.Module):
             self.writer.add_scalar(f'{key}_loss', self.term_loss_tensor_dict[key].item(), self.regular_iter)
             self.writer.add_scalar(f'{key}_lambdas', self.term_lambdas_tensor_dict[key].item(), self.regular_iter)
     
-    def checkpoint_call(self, tracking_param):
+    def checkpoint_call(self, tracking_param, idx_ic):
         
         # Checkpoints
         if tracking_param < self.min_error_for_checkpoint:
         
             directory = self.config['checkpoints_folder_path']
+
+            # Construct the full path for files
+            filename_model_idx_ic = f"idx_ic"
+            path_model_idx_ic = directory.joinpath(filename_model_idx_ic)
+            np.save(path_model_idx_ic, idx_ic)
+            
 
             # Construct the full path for files
             filename_model_weights = f"model_weights.pt"
@@ -866,6 +882,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
         self.regular_iter = 0
 
         time_vector = timePrm.time_vector[:,None]
+        # N_branches = len(self.config['branches_control']['branch_list_ID'])
 
         xt_ic = {} 
         u_ic = {} 
@@ -909,20 +926,24 @@ class Trainer_PIDeepONetLdata(nn.Module):
 
         ## Random Sampling - Get Fixed Indexes
         # BC 
-        idx_bc_fixed = self.random_sampling(xt_bc[chosen_flow_label], label = 'bc')
+        idx_bc_fixed = self.random_sampling(xt_bc[chosen_flow_label], label = 'bc_fixed')
+        # IC 
+        idx_ic_fixed = self.random_sampling(xt_ic[chosen_flow_label], label = 'ic_fixed')
         
         for chosen_flow_label in self.config['train']['training_param_label']:
                 
-            # INLET   
+            # BC   
             u_bc_sample = u_bc[chosen_flow_label][idx_bc_fixed]    
+            # IC   
+            u_ic_sample = u_ic[chosen_flow_label][idx_ic_fixed]    
             
             ## Branch
-            # for i in range(N_vel_branch_inlet):
+            # for i in range(N_branches):
                 # index = self.config['branches_control']['axis_indexes'][self.config['branches_control']['vel_axis_ID'][i]]
                 # branch_input[self.config['branches_control']['branch_input_ID'][i]].append(vel_bc_inlet_sample[:,index].T)
             branch_input[self.config['branches_control']['branch_input_ID'][0]].append(u_bc_sample.T)
-            
-        
+            branch_input[self.config['branches_control']['branch_input_ID'][1]].append(u_ic_sample.T)
+
         for regular_iter in self.custom_bar:
 
             self.regular_iter = regular_iter
@@ -1136,9 +1157,11 @@ class Trainer_PIDeepONetLdata(nn.Module):
                 for i, xt_val_tensor_i in enumerate(self.xt_val_tensor):
                     beta.append(self.model.trunk_list[i](xt_val_tensor_i))
 
-                tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+                tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
-                u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+                u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
+                # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
                
             
             l2_relative_error_u = metric_l2_relative_error(exact = u_ref, pred = u_pred)
@@ -1152,7 +1175,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
             if self.regular_iter % self.config['logging']['log_every_steps'] == 0 or self.regular_iter == self.last_iter:
                 self.logger_call()
 
-            self.checkpoint_call(self.total_loss)
+            self.checkpoint_call(self.total_loss, idx_ic_fixed)
 
             # Conditions to stop the loop
             if self.regular_iter == self.config['train']['stop_iter']:
@@ -1882,9 +1905,11 @@ class Tester(nn.Module):
         self.config = config
         self.model = model
 
-        self.branch_in_dim = self.config['branch1']['neuralNet']['in_dim']
-        self.branch_out_dim = self.config['branch1']['neuralNet']['out_dim']
-            
+        self.branch1_in_dim = self.config['branch1']['neuralNet']['in_dim']
+        self.branch1_out_dim = self.config['branch1']['neuralNet']['out_dim']
+        self.branch2_in_dim = self.config['branch2']['neuralNet']['in_dim']
+        self.branch2_out_dim = self.config['branch2']['neuralNet']['out_dim']
+
     def test_full(self, dataloader, N_batches, branch_input, subset = 'test', param_label = None):
 
         history_log = f"""LOG TEST ON {param_label} - {subset}_dataset\n"""
@@ -1929,10 +1954,12 @@ class Tester(nn.Module):
                 beta.append(self.model.trunk_list[0](inputs))
 
                 ## np.tile
-                tau[0] = tau[0].reshape(-1, self.branch_out_dim)
+                tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
                 # Predicted
-                u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+                u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
+                # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
 
 
             l2_relative_error_u.append(metric_l2_relative_error(exact = u_ref, pred = u_pred).cpu().numpy())
@@ -1989,11 +2016,15 @@ class Tester(nn.Module):
         
 
         with torch.no_grad():
-            tau = self.model.branch_list[0](f_tensor[0])
+            tau = []
+            tau.append(self.model.branch_list[0](f_tensor[0]))
+            tau.append(self.model.branch_list[1](f_tensor[1]))
             beta = self.model.trunk_list[0](xt_tensor)
             ## np.tile
-            tau = tau.reshape(-1, self.branch_out_dim)
-        u_pred_tensor = torch.sum(beta * tau, axis = 1)[:,None]
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+        u_pred_tensor = torch.sum(reduce(lambda x, y: x * y, tau) * beta, axis = 1)[:, None]
+        # u_pred_tensor = torch.sum(beta * tau, axis = 1)[:,None]
             
 
         
@@ -2086,8 +2117,10 @@ class Tester(nn.Module):
         with torch.no_grad():
             tau = [self.model.branch_list[i](f_tensor_i) for i, f_tensor_i in enumerate(f_tensor)]
             beta = self.model.trunk_list[0](xt) 
-            tau[0] = tau[0].view(-1, self.branch_out_dim)
-            u_pred = (tau[0] * beta).sum(dim=1, keepdim=True)
+            tau[0] = tau[0].view(-1, self.branch1_out_dim)
+            tau[1] = tau[1].view(-1, self.branch2_out_dim)
+            u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta, axis = 1)[:, None]
+            # u_pred = (tau[0] * beta).sum(dim=1, keepdim=True)
 
             
         # ------------------------------------------------------------------

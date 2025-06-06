@@ -56,9 +56,19 @@ branch1:
     activation : "tanh" # "swish", "tanh", "gelu"
     xavier_init : true
 
+branch2:
+  neuralNet:
+    architecture : "MLP"  # "Mlp" or "Modified MLP" or "Modified Deeponet"
+    in_dim : 1000  # 'm_input_sensors' (inflow condition u(0,t) per timestep)
+    num_layers : 3
+    hidden_dim : 50
+    out_dim : 128 
+    activation : "tanh" # "swish", "tanh", "gelu"
+    xavier_init : true
+
 branches_control:
-  branch_list_ID: ['branch1']
-  branch_input_ID: ['InflowBC_K'] 
+  branch_list_ID: ['branch1', 'branch2']
+  branch_input_ID: ['InflowBC_K','phi'] 
 
 trunk1:
   neuralNet:
@@ -88,6 +98,8 @@ train:
     ic: 1.0
     bc: 1.0
     val: 1.0
+    bc_fixed: 1.0
+    ic_fixed: 0.1
   data_extraction: 
      mode: 'random' # 'none', 'random'
      decimal_fraction: 0.01 # mode: 'none', 'random'
