@@ -24,7 +24,7 @@ plt.ioff()  # Turn interactive plotting off
 
 
 # Local modules
-from generate_dataset.ground_trust import u_close_form
+from generate_dataset.ground_trust import u_close_form, calculate_phi
 from utils import  get_cpu_memory_usage, get_cuda_memory_usage, plot_magnitude_and_save_absolute_error, craft_bc_and_ic_dataset, craft_validation_dataset, get_coordinates_for_generator,  from_time_to_index, build_stratum_dataset
 
 class NullContainer:
@@ -1958,8 +1958,8 @@ class Tester(nn.Module):
         
         # Exact
         x_array = np.linspace(0, 1, 1000)[:,None]
-        
-        u_exact = u_close_form(x_array, t_i, c, k_i)
+        phi_i = calculate_phi(k_i)
+        u_exact = u_close_form(x_array, t_i, c, k_i, phi_i)
         
         u_exact_tensor = torch.tensor(u_exact, dtype=torch.float32, requires_grad = False).to(self.config['device'])
 
@@ -2059,7 +2059,8 @@ class Tester(nn.Module):
         # ------------------------------------------------------------------
         # 2. Exact solution on the same grid
         # ------------------------------------------------------------------
-        u_ref = u_close_form(x_flat, t_flat, c, k_i)  # expects (x,t,c)
+        phi_i = calculate_phi(k_i)  
+        u_ref = u_close_form(x_flat, t_flat, c, k_i, phi_i)  # expects (x,t,c)
 
         # ------------------------------------------------------------------
         # 3. Convert to torch & push through the network  (xt order)
@@ -3548,8 +3549,8 @@ class modified_Tester(torch.nn.Module):
 
         # Exact
         x_array = np.linspace(0, 1, 1000)[:,None]
-        
-        u_exact = u_close_form(x_array, t_i, c, k_i)
+        phi_i = calculate_phi(k_i)
+        u_exact = u_close_form(x_array, t_i, c, k_i, phi_i)
         
         u_exact_tensor = torch.tensor(u_exact, dtype=torch.float32, requires_grad = False).to(self.config['device'])
 
@@ -3647,7 +3648,8 @@ class modified_Tester(torch.nn.Module):
         # ------------------------------------------------------------------
         # 2. Exact solution on the same grid
         # ------------------------------------------------------------------
-        u_ref = u_close_form(x_flat, t_flat, c, k_i)  # expects (x,t,c)
+        phi_i = calculate_phi(k_i) 
+        u_ref = u_close_form(x_flat, t_flat, c, k_i, phi_i)  # expects (x,t,c)
 
         # ------------------------------------------------------------------
         # 3. Convert to torch & push through the network  (xt order)
