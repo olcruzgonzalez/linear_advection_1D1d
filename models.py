@@ -505,13 +505,14 @@ class Trainer_PIDeepONetLdata(nn.Module):
         for i, xt_bc_tensor_i in enumerate(self.xt_bc_tensor):
             beta.append(self.model.trunk_list[i](xt_bc_tensor_i))
 
-        ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
-
         # Predicted
-        u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
-        # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        if len(self.config['branches_control']['branch_list_ID']) == 1:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        else:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+            u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
        
 
         # Ground Trust
@@ -534,12 +535,15 @@ class Trainer_PIDeepONetLdata(nn.Module):
             beta.append(self.model.trunk_list[i](xt_data_tensor_i))
 
         ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
         # Predicted
-        u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
-        # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        if len(self.config['branches_control']['branch_list_ID']) == 1:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        else:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+            u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
        
 
         # Ground Trust
@@ -562,12 +566,15 @@ class Trainer_PIDeepONetLdata(nn.Module):
             beta.append(self.model.trunk_list[i](xt_ic_tensor_i))
 
         ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
         # Predicted
-        u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
-        # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        if len(self.config['branches_control']['branch_list_ID']) == 1:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        else:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+            u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
        
 
         # Ground Trust
@@ -589,14 +596,15 @@ class Trainer_PIDeepONetLdata(nn.Module):
         beta = []
         beta.append(self.model.trunk_list[0](torch.cat([self.x_phy, self.t_phy], 1)))
 
-        ## np.tile
-        tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
         # Predicted
-        u = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
-        # if len(self.config['branches_control']['branch_list_ID']) == 1:
-        #     u = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        if len(self.config['branches_control']['branch_list_ID']) == 1:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            u = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+        else:
+            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+            tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+            u = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
 
         # Autodiff
         u_x = torch.autograd.grad(
@@ -1157,11 +1165,13 @@ class Trainer_PIDeepONetLdata(nn.Module):
                 for i, xt_val_tensor_i in enumerate(self.xt_val_tensor):
                     beta.append(self.model.trunk_list[i](xt_val_tensor_i))
 
-                tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-                tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
-
-                u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
-                # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+                if len(self.config['branches_control']['branch_list_ID']) == 1:
+                    tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                    u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+                else:
+                    tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                    tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+                    u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
                
             
             l2_relative_error_u = metric_l2_relative_error(exact = u_ref, pred = u_pred)
@@ -1953,13 +1963,14 @@ class Tester(nn.Module):
                 beta = []
                 beta.append(self.model.trunk_list[0](inputs))
 
-                ## np.tile
-                tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-                tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
-
                 # Predicted
-                u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
-                # u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+                if len(self.config['branches_control']['branch_list_ID']) == 1:
+                    tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                    u_pred = torch.sum(tau[0] * beta[0], axis = 1)[:, None]
+                else:
+                    tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                    tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+                    u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]
 
 
             l2_relative_error_u.append(metric_l2_relative_error(exact = u_ref, pred = u_pred).cpu().numpy())
@@ -2012,21 +2023,20 @@ class Tester(nn.Module):
             f_tensor.append(final_view)
         
         
-        
-        
-
         with torch.no_grad():
             tau = []
             tau.append(self.model.branch_list[0](f_tensor[0]))
             tau.append(self.model.branch_list[1](f_tensor[1]))
             beta = self.model.trunk_list[0](xt_tensor)
-            ## np.tile
-            tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-            tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
-        u_pred_tensor = torch.sum(reduce(lambda x, y: x * y, tau) * beta, axis = 1)[:, None]
-        # u_pred_tensor = torch.sum(beta * tau, axis = 1)[:,None]
             
-
+            if len(self.config['branches_control']['branch_list_ID']) == 1:
+                tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                u_pred_tensor = torch.sum(tau[0] * beta, axis = 1)[:, None]
+            else:
+                tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
+                tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
+                u_pred_tensor = torch.sum(reduce(lambda x, y: x * y, tau) * beta, axis = 1)[:, None]
+        
         
         l2_relative_error = torch.linalg.norm((u_exact_tensor-u_pred_tensor), 2)/torch.linalg.norm(u_exact_tensor, 2)
         print(f'l2_relative_error={l2_relative_error.item()} for t = {t_i} and {label}')
@@ -2072,37 +2082,33 @@ class Tester(nn.Module):
         plt.close(fig)
       
     def visualize_comparison_fulldomain(self, branch_input, k_i, c, label):
-        
-
         # ------------------------------------------------------------------
-        # 1. Create a *regular space-time grid* with a single, unambiguous rule:
-        #    - first axis  →  time  (Nt points)
-        #    - second axis →  space (Nx points)
+        # 1. Create a *regular space-time grid*
         # ------------------------------------------------------------------
-        t_star = np.linspace(0.0, 1.0, 100)      # Nt
-        x_star = np.linspace(0.0, 1.0, 1000)     # Nx
+        t_star = np.linspace(0.0, 1.0, 100)  # Nt
+        x_star = np.linspace(0.0, 1.0, 1000) # Nx
 
         TT, XX = np.meshgrid(t_star, x_star, indexing="ij")  # TT,XX ∈ ℝ[Nt,Nx]
 
-        t_flat = TT.reshape(-1, 1)               # ℝ[Nt·Nx,1]
+        t_flat = TT.reshape(-1, 1)  # ℝ[Nt·Nx,1]
         x_flat = XX.reshape(-1, 1)
 
         # ------------------------------------------------------------------
         # 2. Exact solution on the same grid
         # ------------------------------------------------------------------
-        phi_i = calculate_phi(k_i)  
+        phi_i = calculate_phi(k_i)
         u_ref = u_close_form(x_flat, t_flat, c, k_i, phi_i)  # expects (x,t,c)
 
         # ------------------------------------------------------------------
-        # 3. Convert to torch & push through the network  (xt order)
+        # 3. Convert to torch & push through the network (xt order)
         # ------------------------------------------------------------------
         device = self.config["device"]
 
         t = torch.as_tensor(t_flat, dtype=torch.float32, device=device)
         x = torch.as_tensor(x_flat, dtype=torch.float32, device=device)
 
-        # >>> trunk expects (x , t)  <<<  so concatenate in that order
-        xt = torch.cat([x, t], dim=1)        # shape: (N, 2)
+        # >>> trunk expects (x , t) <<< so concatenate in that order
+        xt = torch.cat([x, t], dim=1)  # shape: (N, 2)
 
         # == Branch inputs (unchanged) =====================================
         f_tensor = []
@@ -2116,13 +2122,16 @@ class Tester(nn.Module):
         # == PINN prediction ===============================================
         with torch.no_grad():
             tau = [self.model.branch_list[i](f_tensor_i) for i, f_tensor_i in enumerate(f_tensor)]
-            beta = self.model.trunk_list[0](xt) 
-            tau[0] = tau[0].view(-1, self.branch1_out_dim)
-            tau[1] = tau[1].view(-1, self.branch2_out_dim)
-            u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta, axis = 1)[:, None]
-            # u_pred = (tau[0] * beta).sum(dim=1, keepdim=True)
+            beta = self.model.trunk_list[0](xt)
+            if len(self.config['branches_control']['branch_list_ID']) == 1:
+                # Single branch case
+                tau[0] = tau[0].view(-1, self.branch1_out_dim)
+                u_pred = torch.sum(tau[0] * beta, axis=1)[:, None]
+            else:
+                tau[0] = tau[0].view(-1, self.branch1_out_dim)
+                tau[1] = tau[1].view(-1, self.branch2_out_dim)
+                u_pred = torch.sum(reduce(lambda x, y: x * y, tau) * beta, axis=1)[:, None]
 
-            
         # ------------------------------------------------------------------
         # 4. Error metrics
         # ------------------------------------------------------------------
@@ -2135,27 +2144,46 @@ class Tester(nn.Module):
         print(f'l2_relative_error={l2_relative_error} for {label}')
 
         # ------------------------------------------------------------------
-        # 5. Reshape back to (Nt,Nx) – NO transposes, the axes are correct
+        # 5. Reshape back to (Nt,Nx)
         # ------------------------------------------------------------------
         Nt, Nx = TT.shape
         u_pred = u_pred.cpu().numpy().reshape(Nt, Nx)
-        u_ref  = u_ref.reshape(Nt, Nx)
+        u_ref = u_ref.reshape(Nt, Nx)
         abs_err = np.abs(u_ref - u_pred)
 
         # ------------------------------------------------------------------
-        # 6. Plot
+        # 6. Plotting Section (MODIFIED)
         # ------------------------------------------------------------------
         fig, axes = plt.subplots(1, 3, figsize=(18, 5), constrained_layout=True)
 
-        titles = [f"Exact u(t,x) ({label})", "Predicted u(t,x)", "Absolute error"]
-        data   = [u_ref, u_pred, abs_err]
+        # --- Find the common range for the colorbars of exact and predicted plots ---
+        vmin = min(u_ref.min(), u_pred.min())
+        vmax = max(u_ref.max(), u_pred.max())
 
-        for ax, z, title in zip(axes, data, titles):
-            pcm = ax.pcolormesh(t_star, x_star, z.T, cmap="jet", shading="auto")
-            fig.colorbar(pcm, ax=ax)
-            ax.set_xlabel("t")
-            ax.set_ylabel("x")
-            ax.set_title(title)
+        # --- Plot 1: Exact solution ---
+        ax1 = axes[0]
+        pcm1 = ax1.pcolormesh(t_star, x_star, u_ref.T, cmap="jet", shading="auto", vmin=vmin, vmax=vmax)
+        fig.colorbar(pcm1, ax=ax1)
+        ax1.set_xlabel("t")
+        ax1.set_ylabel("x")
+        ax1.set_title(f"Exact u(t,x) ({label})")
+
+        # --- Plot 2: Predicted solution ---
+        ax2 = axes[1]
+        pcm2 = ax2.pcolormesh(t_star, x_star, u_pred.T, cmap="jet", shading="auto", vmin=vmin, vmax=vmax)
+        fig.colorbar(pcm2, ax=ax2)
+        ax2.set_xlabel("t")
+        ax2.set_ylabel("x")
+        ax2.set_title("Predicted u(t,x)")
+
+        # --- Plot 3: Absolute error (with its own color scale) ---
+        ax3 = axes[2]
+        # Note: No vmin/vmax here, so it uses its own automatic range
+        pcm3 = ax3.pcolormesh(t_star, x_star, abs_err.T, cmap="jet", shading="auto")
+        fig.colorbar(pcm3, ax=ax3)
+        ax3.set_xlabel("t")
+        ax3.set_ylabel("x")
+        ax3.set_title("Absolute error")
 
         # ------------------------------------------------------------------
         # 7. Save & close
