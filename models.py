@@ -591,7 +591,7 @@ class Trainer_PIDeepONetLdata(nn.Module):
 
         ## np.tile
         tau[0] = tau[0].reshape(-1, self.branch1_out_dim)
-        tau[1] = tau[1].reshape(-1, self.branch1_out_dim)
+        tau[1] = tau[1].reshape(-1, self.branch2_out_dim)
 
         # Predicted
         u = torch.sum(reduce(lambda x, y: x * y, tau) * beta[0], axis = 1)[:, None]

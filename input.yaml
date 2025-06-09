@@ -1,7 +1,7 @@
 # Input file
 
 project:
-  name: "Linear-Advection_1D1d u(x,t), f(x,t)"
+  name: "Linear-Advection_1D1d u(x,t), f(x,t) Varying BC and IC"
   status: "sota" 
   info-techniques: 
     Group I:
@@ -24,8 +24,8 @@ project:
 
 dataset:
   path: '.dataset'
-  generate: false # true or false
-  processing: false  # true or false
+  generate: true # true or false
+  processing: true # true or false
   train_fraction: 0.68
   # val_fraction: 0.02
   test_fraction: 0.3 
@@ -33,7 +33,7 @@ dataset:
   varying_param_label: ['InflowBC_K05','InflowBC_K06','InflowBC_K07','InflowBC_K08','InflowBC_K09','InflowBC_K10','InflowBC_K11','InflowBC_K12','InflowBC_K13','InflowBC_K14','InflowBC_K15','InflowBC_K16','InflowBC_K17','InflowBC_K18','InflowBC_K19','InflowBC_K20','InflowBC_K056','InflowBC_K125','InflowBC_K195'] # folder_ID
   strata_labels: ['PHY','BC']
   state_vector_labels: ['coord_x','u'] 
-  N_samples_per_stratum: {'N_coll': 10000}
+  N_samples_per_stratum: {'N_coll': 1000}
   L: 1.0
   c: 1.0
   initial_time: 0.0
@@ -86,20 +86,20 @@ trunk_control:
   
   
 train: 
-  n_training_param: 6
-  training_param: [0.5,0.9,1.2,1.5,1.8,2.0] # parameter k
-  training_param_label: ['InflowBC_K05','InflowBC_K09','InflowBC_K12','InflowBC_K15','InflowBC_K18','InflowBC_K20']
+  n_training_param: 16
+  training_param: [0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0] # parameter k
+  training_param_label: ['InflowBC_K05','InflowBC_K06','InflowBC_K07','InflowBC_K08','InflowBC_K09','InflowBC_K10','InflowBC_K11','InflowBC_K12','InflowBC_K13','InflowBC_K14','InflowBC_K15','InflowBC_K16','InflowBC_K17','InflowBC_K18','InflowBC_K19','InflowBC_K20']
   adam_steps: 50000
   lbfgs_steps: 0
   stop_iter: -1 
-  batch_size_coll: 1024
+  batch_size_coll: 512
   batch_dfraction:  # Specific decimal fraction with respect to total data in boundary conditions {Inlet, Wall, Outlet}, initial condition and validation ds
     data: 1.0
     ic: 1.0
     bc: 1.0
     val: 1.0
     bc_fixed: 1.0
-    ic_fixed: 0.1
+    ic_fixed: 1.0
   data_extraction: 
      mode: 'random' # 'none', 'random'
      decimal_fraction: 0.01 # mode: 'none', 'random'

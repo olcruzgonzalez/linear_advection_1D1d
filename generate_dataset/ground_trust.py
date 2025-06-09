@@ -27,10 +27,11 @@ def calculate_phi(k: float) -> float:
   return phi
 
 def u_0(x,k,phi):
-    return np.sin(k*np.pi * x + phi) - np.sin(phi)# from initial condition line
+    # return np.sin(k*np.pi * x + phi) - np.sin(phi)# from initial condition line
+    return np.sin(np.pi * x + phi) - np.sin(phi)# from initial condition line
 
 def g_bc(t, k):
-    return np.sin(k*np.pi * t)  # from inflow boundary condition
+    return np.sin(k*np.pi/2 * t) + k*np.pi/2*t  # from inflow boundary condition
 
 def u_close_form(x, t, c, k, phi):
     return np.where(x >= c*t,
