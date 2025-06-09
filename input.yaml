@@ -67,8 +67,10 @@ branch2:
     xavier_init : true
 
 branches_control:
-  branch_list_ID: ['branch1', 'branch2']
-  branch_input_ID: ['InflowBC_K','phi'] 
+  branch_list_ID: ['branch1']
+  branch_input_ID: ['InflowBC_K'] 
+  # branch_list_ID: ['branch1', 'branch2']
+  # branch_input_ID: ['InflowBC_K','phi'] 
 
 trunk1:
   neuralNet:

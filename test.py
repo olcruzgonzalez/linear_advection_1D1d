@@ -45,8 +45,8 @@ def testing_call(config):
     model.to(config['device'])
     c = config['dataset']['c']
 
-    load_path_idx_ic = config['checkpoints_folder_path'].joinpath(f"idx_ic.npy")
-    idx_ic = np.load(load_path_idx_ic)
+    # load_path_idx_ic = config['checkpoints_folder_path'].joinpath(f"idx_ic.npy")
+    # idx_ic = np.load(load_path_idx_ic)
 
     for idx, ID in enumerate(config['test']['test_param_label']):
 
@@ -73,10 +73,10 @@ def testing_call(config):
         u_ic = u_phy[idx_aux]
 
         # IC
-        u_ic_sample = u_ic[idx_ic]
+        # u_ic_sample = u_ic[idx_ic]
 
         branch_input[config['branches_control']['branch_input_ID'][0]].append(u_bc.T)
-        branch_input[config['branches_control']['branch_input_ID'][1]].append(u_ic_sample.T)
+        # branch_input[config['branches_control']['branch_input_ID'][1]].append(u_ic.T)
 
         print("### Testing ... ###")
         config['logger'].info("### Testing ...")

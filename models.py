@@ -818,17 +818,18 @@ class Trainer_PIDeepONetLdata(nn.Module):
             self.writer.add_scalar(f'{key}_loss', self.term_loss_tensor_dict[key].item(), self.regular_iter)
             self.writer.add_scalar(f'{key}_lambdas', self.term_lambdas_tensor_dict[key].item(), self.regular_iter)
     
-    def checkpoint_call(self, tracking_param, idx_ic):
+    def checkpoint_call(self, tracking_param):
+        # def checkpoint_call(self, tracking_param, idx_ic):
         
         # Checkpoints
         if tracking_param < self.min_error_for_checkpoint:
         
             directory = self.config['checkpoints_folder_path']
 
-            # Construct the full path for files
-            filename_model_idx_ic = f"idx_ic"
-            path_model_idx_ic = directory.joinpath(filename_model_idx_ic)
-            np.save(path_model_idx_ic, idx_ic)
+            # # Construct the full path for files
+            # filename_model_idx_ic = f"idx_ic"
+            # path_model_idx_ic = directory.joinpath(filename_model_idx_ic)
+            # np.save(path_model_idx_ic, idx_ic)
             
 
             # Construct the full path for files
@@ -935,22 +936,22 @@ class Trainer_PIDeepONetLdata(nn.Module):
         ## Random Sampling - Get Fixed Indexes
         # BC 
         idx_bc_fixed = self.random_sampling(xt_bc[chosen_flow_label], label = 'bc_fixed')
-        # IC 
-        idx_ic_fixed = self.random_sampling(xt_ic[chosen_flow_label], label = 'ic_fixed')
+        # # IC 
+        # idx_ic_fixed = self.random_sampling(xt_ic[chosen_flow_label], label = 'ic_fixed')
         
         for chosen_flow_label in self.config['train']['training_param_label']:
                 
             # BC   
             u_bc_sample = u_bc[chosen_flow_label][idx_bc_fixed]    
-            # IC   
-            u_ic_sample = u_ic[chosen_flow_label][idx_ic_fixed]    
+            # # IC   
+            # u_ic_sample = u_ic[chosen_flow_label][idx_ic_fixed]    
             
             ## Branch
             # for i in range(N_branches):
                 # index = self.config['branches_control']['axis_indexes'][self.config['branches_control']['vel_axis_ID'][i]]
                 # branch_input[self.config['branches_control']['branch_input_ID'][i]].append(vel_bc_inlet_sample[:,index].T)
             branch_input[self.config['branches_control']['branch_input_ID'][0]].append(u_bc_sample.T)
-            branch_input[self.config['branches_control']['branch_input_ID'][1]].append(u_ic_sample.T)
+            # branch_input[self.config['branches_control']['branch_input_ID'][1]].append(u_ic_sample.T)
 
         for regular_iter in self.custom_bar:
 
@@ -1185,7 +1186,8 @@ class Trainer_PIDeepONetLdata(nn.Module):
             if self.regular_iter % self.config['logging']['log_every_steps'] == 0 or self.regular_iter == self.last_iter:
                 self.logger_call()
 
-            self.checkpoint_call(self.total_loss, idx_ic_fixed)
+            self.checkpoint_call(self.total_loss)
+            # self.checkpoint_call(self.total_loss, idx_ic_fixed)
 
             # Conditions to stop the loop
             if self.regular_iter == self.config['train']['stop_iter']:
